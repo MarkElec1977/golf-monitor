@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Launch Monitor - Mobile Capture</title>
+    <style>
+        body { margin: 0; padding: 0; background-color: #111; color: #fff; font-family: 'Arial', sans-serif; overflow: hidden; }
+        
+        #camera-container { position: relative; width: 100vw; height: 70vh; background-color: #000; }
+        #video-preview { width: 100%; height: 100%; object-fit: cover; }
+        
+        #status-overlay { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 8px 14px; border-radius: 6px; border-left: 4px solid #f39c12; font-size: 13px; }
+        .status-ready { border-left-color: #2ecc71 !important; }
+        .status-recording { border-left-color: #e74c3c !important; }
+        
+        #audio-meter-bg { position: absolute; bottom: 10px; left: 10px; right: 10px; height: 8px; background: rgba(255,255,255,0.2); border-radius: 4px; overflow: hidden; }
+        #audio-meter-fill { height: 100%; width: 0%; background: #2ecc71; border-radius: 4px; transition: width 0.05s linear; }
+        
+        #controls-panel { height: 30vh; display: flex; flex-direction: column; align-items: center; justify-content: space-around; padding: 10px; box-sizing: border-box; background: #1a1a1a; }
+        
+        .selector-row { display: flex; justify-content: center; align-items: center; gap: 10px; width: 100%; }
+        select { background: #333; color: white; border: 1px solid #555; padding: 10px; border-radius: 6px; font-size: 16px; width: 45%; }
+        input[type="text"] { background: #222; color: #0f0; border: 1px solid #555; padding: 10px; border-radius: 6px; font-size: 13px; width: 45%; text-align: center; }
+        
+        button { background: #2ecc71; color: white; border: none; padding: 14px; font-size: 16px; border-radius: 30px; font-weight: bold; width: 90%; cursor: pointer; text-transform: uppercase; letter-spacing: 1px; }
+        button:active { background: #27ae60; }
+        button.active-trigger { background: #e74c3c; }
+        
+        #results-modal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.95); z-index: 100; flex-direction: column; align-items: center; justify-content: center; padding: 20px; box-sizing: border-box; }
+        #result-img { max-width: 100%; max-height: 45vh; border: 2px solid #2ecc71; border-radius: 10px; margin-bottom: 15px; }
+        .stats-box { background: rgba(255,255,255,0.1); padding: 10px 20px; border-radius: 8px; margin-bottom: 15px; text-align: center; width: 80%; font-size: 14px; }
+        .close-btn { background: #e74c3c; width: 80%; }
+    </style>
+</head>
+<body>
+
+    <!-- VISOR DE CÁMARA Y HUD -->
+    <div id="camera-container">
+        <video id="video-preview" autoplay playsinline muted></video>
+        
+        <div id="status-overlay" id="status-box">
+            <div id="status-text" style="font-weight: bold;">Iniciando sistema...</div>
+            <div id="status-sub" style="color: #aaa; margin-top: 2px;">Conceda permisos de cámara y micro</div>
+        </div>
+        
+        <div id="audio-meter-bg">
+            <div id="audio-meter-fill"></div>
+        </div>
+    </div>
+
+    <!-- PANEL DE CONTROLES -->
+    <div id="controls-panel">
+        <div class="selector-row">
+            <select id="club-selector">
+                <option value="Hierro 7" selected>Hierro 7</option>
+                <option value="Hierro 8">Hierro 8</option>
+                <option value="Hierro 9">Hierro 9</option>
+                <option value="Wedge">Wedge</option>
+                <option value="Driver">Driver</option>
+                <option value="Madera">Madera</option>
+            </select>
+            <input type="text" id="api-url" placeholder="URL Cloudflare (https://...)">
+        </div>
+        
+        <button id="toggle-btn" onclick="toggleSystem()">ACTIVAR GATILLO ACÚSTICO</button>
+    </div>
+
+    <!-- PANTALLA DE RESULTADOS -->
+    <div id="results-modal">
+        <h2 style="color: #2ecc71; margin: 0 0 10px 0;">¡Impacto Registrado!</h2>
+        <img id="result-img" src="" alt="Resultado">
+        <div class="stats-box" id="stats-text">Calculando telemetría...</div>
+        <button class="close-btn" onclick="closeModal()">Siguiente Golpe</button>
+    </div>
+
+    <script>
+        let mediaRecorder;
+        let recordedChunks = [];
+        let audioContext, analyser, microphone, javascriptNode;
+        let isSystemActive = false;
+        let isProcessing = false;
+        
+        const videoElement = document.getElementById('video-preview');
+        const statusText = document.getElementById('status-text');
+        const statusSub = document.getElementById('status-sub');
+        const statusOverlay = document.getElementById('status-overlay');
+        const audioFill = document.getElementById('audio-meter-fill');
+        const toggleBtn = document.getElementById('toggle-btn');
+
+        async function initCameraAndAudio() {
+            try {
+                // 1. Solicitar Cámara trasera con máxima tasa de fotogramas posible
+                const constraints = {
+                    video: {
+                        facingMode: { exact: "environment" },
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 },
+                        frameRate: { ideal: 120, min: 30 }
+                    },
+                    audio: true
+                };
+
+                let stream;
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia(constraints);
+                } catch (e) {
+                    // Fallback si la cámara trasera exacta falla
+                    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                }
+
+                videoElement.srcObject = stream;
+
+                // 2. Configurar MediaRecorder para bucle de vídeo
+                let options = { mimeType: 'video/webm;codecs=vp9' };
+                if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                    options = { mimeType: 'video/webm' };
+                }
+
+                mediaRecorder = new MediaRecorder(stream, options);
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        recordedChunks.push(event.data);
+                    }
+                };
+
+                mediaRecorder.onstop = () => {
+                    const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                    sendVideoToServer(blob);
+                    recordedChunks = [];
+                };
+
+                // 3. Configurar Web Audio API para el Gatillo Acústico
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                microphone = audioContext.createMediaStreamSource(stream);
+                javascriptNode = audioContext.createScriptProcessor(2048, 1, 1);
+
+                analyser.smoothingTimeConstant = 0.2;
+                analyser.fftSize = 1024;
+
+                microphone.connect(analyser);
+                analyser.connect(javascriptNode);
+                javascriptNode.connect(audioContext.destination);
+
+                javascriptNode.onaudioprocess = () => {
+                    if (!isSystemActive || isProcessing) return;
+
+                    const array = new Uint8Array(analyser.frequencyBinCount);
+                    analyser.getByteFrequencyData(array);
+                    
+                    let values = 0;
+                    for (let i = 0; i < array.length; i++) {
+                        values += array[i];
+                    }
+                    let average = values / array.length;
+                    
+                    // Actualizar medidor visual de volumen en pantalla
+                    audioFill.style.width = Math.min(100, (average * 2)) + '%';
+
+                    // UMBRAL DE IMPACTO (Puedes ajustarlo si se dispara con el viento)
+                    if (average > 45) { 
+                        triggerImpact();
+                    }
+                };
+
+                statusText.innerText = "Sistema Armado";
+                statusSub.innerText = "Listo para golpear";
+                statusOverlay.classList.add('status-ready');
+                toggleBtn.disabled = false;
+
+            } catch (err) {
+                alert("Error al acceder a los dispositivos: " + err.message);
+                statusText.innerText = "Error de Permisos";
+                statusSub.innerText = "Revisa HTTPS y permisos";
+            }
+        }
+
+        function toggleSystem() {
+            if (!isSystemActive) {
+                if (audioContext && audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
+                isSystemActive = true;
+                toggleBtn.innerText = "DESARMAR GATILLO";
+                toggleBtn.classList.add('active-trigger');
+                statusText.innerText.innerText = "Escuchando impacto...";
+                statusOverlay.classList.remove('status-ready');
+                statusOverlay.classList.add('status-recording');
+                
+                // Iniciar grabación cíclica
+                recordedChunks = [];
+                mediaRecorder.start();
+            } else {
+                resetSystem();
+            }
+        }
+
+        function triggerImpact() {
+            if (isProcessing) return;
+            isProcessing = true;
+            
+            statusText.innerText = "¡Impacto detectado!";
+            statusSub.innerText = "Procesando clip...";
+
+            // Detenemos la grabación actual para recortar el clip inmediato
+            mediaRecorder.stop();
+
+            // Breve pausa de rearme del buffer tras el disparo
+            setTimeout(() => {
+                if (isSystemActive) {
+                    recordedChunks = [];
+                    mediaRecorder.start();
+                    isProcessing = false;
+                    statusText.innerText = "Escuchando impacto...";
+                    statusSub.innerText = "Sistema armado";
+                }
+            }, 1500);
+        }
+
+        async function sendVideoToServer(videoBlob) {
+            const apiUrl = document.getElementById('api-url').value.trim();
+            const club = document.getElementById('club-selector').value;
+
+            if (!apiUrl) {
+                alert("Por favor, introduce la URL de Cloudflare antes de golpear.");
+                closeModal();
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('video', videoBlob, 'shot.webm');
+            formData.append('palo', club);
+
+            try {
+                const response = await fetch(`${apiUrl}/api/v1/analizar`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+                
+                if (response.ok && data.status === "success") {
+                    document.getElementById('result-img').src = data.imagen_resultado_b64;
+                    document.getElementById('stats-text').innerHTML = `
+                        <b>Golpe #${data.golpe_numero} (${data.palo})</b><br>
+                        Velocidad: <b>${data.velocidad_kmh} km/h</b> | Elevación: <b>${data.elevacion_deg}º</b><br>
+                        Carry: <span style="color:#00c0ff; font-weight:bold;">${data.carry_m} m</span> | Total: <span style="color:#00c0ff; font-weight:bold;">${data.total_m} m</span>
+                    `;
+                    document.getElementById('results-modal').style.display = 'flex';
+                } else {
+                    alert("Error en el servidor: " + (data.detail || "Desconocido"));
+                }
+            } catch (err) {
+                alert("Error de conexión con la nube: " + err.message);
+            }
+        }
+
+        function resetSystem() {
+            isSystemActive = false;
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                mediaRecorder.stop();
+            }
+            toggleBtn.innerText = "ACTIVAR GATILLO ACÚSTICO";
+            toggleBtn.classList.remove('active-trigger');
+            statusText.innerText = "Sistema Armado";
+            statusSub.innerText = "Listo para golpear";
+            statusOverlay.classList.remove('status-recording');
+            statusOverlay.classList.add('status-ready');
+            isProcessing = false;
+        }
+
+        function closeModal() {
+            document.getElementById('results-modal').style.display = 'none';
+        }
+
+        // Arrancar permisos al cargar la página
+        window.onload = initCameraAndAudio;
+    </script>
+</body>
+</html>
