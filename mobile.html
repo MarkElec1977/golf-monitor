@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Launch Monitor - Sensor Móvil</title>
+    <style>
+        body { margin: 0; padding: 0; background-color: #000; color: #fff; font-family: 'Arial', sans-serif; height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+        
+        /* Visor de cámara a pantalla completa */
+        #camera-container { flex-grow: 1; position: relative; background: #111; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+        #video-preview { width: 100%; height: 100%; object-fit: cover; }
+        
+        /* Overlay de estado */
+        #status-overlay { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); padding: 10px 20px; border-radius: 30px; font-size: 14px; font-weight: bold; border: 2px solid #e74c3c; display: flex; align-items: center; gap: 10px; white-space: nowrap; z-index: 10;}
+        .dot { width: 10px; height: 10px; border-radius: 50%; background: #e74c3c; }
+        .status-connected { border-color: #f39c12 !important; }
+        .status-connected .dot { background: #f39c12 !important; }
+        .status-aligned { border-color: #2ecc71 !important; }
+        .status-aligned .dot { background: #2ecc71 !important; box-shadow: 0 0 8px #2ecc71; }
+        
+        /* Panel de Control Inferior */
+        #controls { height: 120px; background: #1a1a1a; padding: 15px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; gap: 10px; border-top: 2px solid #333;}
+        input[type="text"] { background: #222; color: #0f0; border: 1px solid #555; padding: 12px; border-radius: 6px; font-size: 14px; width: 100%; box-sizing: border-box; text-align: center;}
+        button { background: #3498db; color: white; border: none; padding: 15px; font-size: 16px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer; text-transform: uppercase; }
+        button:active { background: #2980b9; }
+
+        /* Canvas oculto para procesar fotos */
+        #hidden-canvas { display: none; }
+    </style>
+</head>
+<body>
+
+    <div id="camera-container">
+        <div id="status-overlay">
+            <div class="dot" id="status-dot"></div>
+            <span id="status-text">Esperando conexión...</span>
+        </div>
+        <video id="video-preview" autoplay playsinline muted></video>
+        <canvas id="hidden-canvas"></canvas>
+    </div>
+
+    <div id="controls">
+        <input type="text" id="api-url" placeholder="URL de Cloudflare (https://...)">
+        <button id="btn-conectar" onclick="iniciarSensor()">Conectar y Transmitir</button>
+    </div>
+
+    <script>
+        const video = document.getElementById('video-preview');
+        const canvas = document.getElementById('hidden-canvas');
+        const ctx = canvas.getContext('2d');
+        let baseUrl = "";
+        let streamInterval = null;
+        let isStreaming = false;
+
+        async function iniciarSensor() {
+            baseUrl = document.getElementById('api-url').value.trim();
+            if (!baseUrl) { alert("Introduce la URL de Cloudflare"); return; }
+
+            try {
+                // 1. Pedir permisos y encender cámara trasera
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } 
+                });
+                video.srcObject = stream;
+                
+                document.getElementById('status-overlay').className = "status-connected";
+                document.getElementById('status-text').innerText = "Cámara Activa - Buscando Fiduciales";
+                document.getElementById('btn-conectar').innerText = "Transmitiendo...";
+                document.getElementById('btn-conectar').style.background = "#27ae60";
+                
+                isStreaming = true;
+
+                // 2. Esperar a que el vídeo arranque para empezar a mandar fotos
+                video.onloadeddata = () => {
+                    // Enviar un frame cada 800 milisegundos
+                    streamInterval = setInterval(enviarFrameAlineacion, 800);
+                };
+
+            } catch (err) {
+                // Fallback por si la cámara trasera falla en algunos navegadores
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    video.srcObject = stream;
+                    video.onloadeddata = () => { streamInterval = setInterval(enviarFrameAlineacion, 800); };
+                    isStreaming = true;
+                } catch (e) {
+                    alert("Error de cámara. Recuerda usar HTTPS.");
+                }
+            }
+        }
+
+        function enviarFrameAlineacion() {
+            if (!isStreaming || !baseUrl) return;
+
+            // Dibujar el fotograma actual del vídeo en el canvas oculto
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            // Convertir a JPEG comprimido (calidad 0.6 para que viaje súper rápido)
+            canvas.toBlob(async (blob) => {
+                const formData = new FormData();
+                formData.append('imagen', blob, 'frame.jpg');
+
+                try {
+                    const response = await fetch(`${baseUrl}/api/v1/alineacion`, {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const data = await response.json();
+                    
+                    // Si el servidor (Colab) dice que YOLO ha visto las 4 espumas, nos ponemos en verde
+                    if (data.fiduciales_ok) {
+                        document.getElementById('status-overlay').className = "status-aligned";
+                        document.getElementById('status-text').innerText = "¡ALINEACIÓN CORRECTA!";
+                    } else {
+                        document.getElementById('status-overlay').className = "status-connected";
+                        document.getElementById('status-text').innerText = "Buscando Fiduciales...";
+                    }
+                } catch (err) {
+                    console.log("Error enviando frame", err);
+                }
+            }, 'image/jpeg', 0.6);
+        }
+    </script>
+</body>
+</html>
