@@ -22,12 +22,18 @@
         .status-title { font-size: 11px; color: #bbb; margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.5px;}
         .status-msg { font-size: 14px; font-weight: bold; }
         #hidden-canvas { display: none; }
+        #flash-overlay { position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: white; z-index: 9998; opacity: 0; pointer-events: none; transition: opacity 0.3s ease-out; }
     </style>
 </head>
 <body>
 
-    <div id="portrait-warning"><svg fill="#fff" height="60px" width="60px" viewBox="0 0 24 24" style="margin-bottom:20px; transform: rotate(90deg);"><path d="M16 1H8C6.34 1 5 2.34 5 4v16c0 1.66 1.34 3 3 3h8c1.66 0 3-1.34 3-3V4c0-1.66-1.34-3-3-3zm1 17H7V4h10v14z"/></svg><div>Gira el móvil a horizontal.</div></div>
-    <div id="camera-container"><video id="video-preview" autoplay playsinline muted></video><canvas id="hidden-canvas"></canvas></div>
+    <div id="portrait-warning"><div>Gira el móvil a horizontal.</div></div>
+    <div id="camera-container">
+        <video id="video-preview" autoplay playsinline muted></video>
+        <canvas id="hidden-canvas"></canvas>
+    </div>
+    <div id="flash-overlay"></div>
+
     <div id="controls-overlay">
         <h2>Sensor Óptico</h2>
         <input type="text" id="api-url" placeholder="URL Cloudflare">
@@ -39,10 +45,10 @@
         const video = document.getElementById('video-preview');
         const canvas = document.getElementById('hidden-canvas');
         const ctx = canvas.getContext('2d');
+        const flash = document.getElementById('flash-overlay');
         let baseUrl = "";
         let isConnected = false;
         let isCapturing = false;
-        let failCount = 0;
 
         async function iniciarSensor() {
             baseUrl = document.getElementById('api-url').value.trim();
@@ -51,41 +57,44 @@
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } });
                 video.srcObject = stream;
                 document.getElementById('status-box').className = "active";
-                document.getElementById('status-text').innerText = "Conectando a la nube...";
+                document.getElementById('status-text').innerText = "Conectando...";
                 document.getElementById('btn-conectar').style.background = "#27ae60";
                 isConnected = true;
-                setInterval(consultarEstadoYActuar, 800);
+                
+                // REDUCIDO A 2.5 SEGUNDOS PARA NO QUEMAR EL MÓVIL
+                setInterval(consultarEstadoYActuar, 2500);
             } catch (err) { alert("Error de cámara."); }
         }
 
         async function consultarEstadoYActuar() {
             if (!isConnected || !baseUrl) return;
             try {
-                const response = await fetch(`${baseUrl}/api/v1/estado`);
-                if (!response.ok) throw new Error("Servidor no responde");
+                // EVITAR CACHÉ DEL NAVEGADOR
+                const response = await fetch(`${baseUrl}/api/v1/estado?nocache=${Date.now()}`);
+                if (!response.ok) return;
                 const state = await response.json();
-                failCount = 0; // Si conecta, reiniciamos el contador de fallos
                 
                 if (state.fase_actual === 'tomar_foto' && !isCapturing) {
                     isCapturing = true;
                     document.getElementById('status-box').className = "active";
                     document.getElementById('status-text').innerText = "📸 Procesando...";
+                    
+                    // EFECTO FLASH VISUAL
+                    flash.style.opacity = '0.8';
+                    setTimeout(() => { flash.style.opacity = '0'; }, 150);
+
                     await enviarFrameAlineacion();
                 } else if (state.fase_actual === 'setup' && !isCapturing) {
                     if (state.fiduciales_ok) {
                         document.getElementById('status-box').className = "aligned";
-                        document.getElementById('status-text').innerText = "ALINEACIÓN CONFIRMADA";
+                        document.getElementById('status-text').innerText = "ALINEACIÓN OK";
                     } else {
                         document.getElementById('status-box').className = "active";
-                        document.getElementById('status-text').innerText = "Esperando orden del PC...";
+                        document.getElementById('status-text').innerText = "Esperando orden...";
                     }
                 }
             } catch (err) {
-                failCount++;
-                if (failCount > 2) {
-                    document.getElementById('status-box').className = "error";
-                    document.getElementById('status-text').innerText = "DESCONECTADO. Revisa la URL.";
-                }
+                // Errores silenciosos para no saturar
             }
         }
 
@@ -93,11 +102,15 @@
             if (video.videoWidth === 0) { isCapturing = false; return; }
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
+            
+            // LIMPIAR CANVAS ANTES DE DIBUJAR PARA EVITAR FOTOS REPETIDAS
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
             canvas.toBlob(async (blob) => {
                 const formData = new FormData();
-                formData.append('imagen', blob, 'frame.jpg');
+                // AÑADIR TIMESTAMP AL NOMBRE DEL ARCHIVO
+                formData.append('imagen', blob, `frame_${Date.now()}.jpg`);
                 try {
                     const res = await fetch(`${baseUrl}/api/v1/alineacion`, { method: 'POST', body: formData });
                     if (res.ok) {
