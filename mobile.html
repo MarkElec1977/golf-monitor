@@ -3,42 +3,30 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Launch Monitor - Sensor Móvil (HUD)</title>
+    <title>Launch Monitor - Sensor Móvil</title>
     <style>
-        body { margin: 0; padding: 0; background-color: #000; color: #fff; font-family: 'Arial', sans-serif; overflow: hidden; }
-        #portrait-warning { display: none; position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: #c0392b; z-index: 9999; align-items: center; justify-content: center; font-size: 24px; font-weight: bold; text-align: center; padding: 20px; flex-direction: column; box-sizing: border-box;}
+        body { margin: 0; background: #000; color: #fff; font-family: 'Arial', sans-serif; overflow: hidden; }
+        #portrait-warning { display: none; position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: #c0392b; z-index: 9999; align-items: center; justify-content: center; font-size: 24px; font-weight: bold; text-align: center;}
         @media screen and (orientation: portrait) { #portrait-warning { display: flex; } }
-        #camera-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; background: #000; }
+        #camera-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; }
         #video-preview { width: 100%; height: 100%; object-fit: cover; }
-        #controls-overlay { position: absolute; top: 20px; right: 20px; width: 280px; background: rgba(15, 15, 15, 0.65); z-index: 2; padding: 20px; border-radius: 12px; box-sizing: border-box; backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 10px 30px rgba(0,0,0,0.5);}
-        h2 { margin: 0 0 15px 0; font-size: 16px; color: #f39c12; text-align: center; text-transform: uppercase; letter-spacing: 1px;}
-        input[type="text"] { background: rgba(0,0,0,0.5); color: #0f0; border: 1px solid #555; padding: 12px; border-radius: 6px; font-size: 14px; width: 100%; box-sizing: border-box; text-align: center; margin-bottom: 15px;}
-        button { background: #3498db; color: white; border: none; padding: 14px; font-size: 15px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer; text-transform: uppercase; margin-bottom: 15px; transition: background 0.2s;}
-        button:active { background: #2980b9; }
-        #status-box { background: rgba(0,0,0,0.4); padding: 12px; border-radius: 8px; border-left: 4px solid #7f8c8d; }
-        #status-box.active { border-left-color: #f39c12; }
-        #status-box.aligned { border-left-color: #2ecc71; }
-        #status-box.error { border-left-color: #e74c3c; background: rgba(231, 76, 60, 0.2); }
-        .status-title { font-size: 11px; color: #bbb; margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.5px;}
+        #controls-overlay { position: absolute; top: 20px; right: 20px; width: 280px; background: rgba(15,15,15,0.7); z-index: 2; padding: 20px; border-radius: 12px; backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.1); }
+        input { background: rgba(0,0,0,0.5); color: #0f0; border: 1px solid #555; padding: 12px; border-radius: 6px; font-size: 14px; width: 100%; box-sizing: border-box; text-align: center; margin-bottom: 15px;}
+        button { background: #3498db; color: white; border: none; padding: 14px; font-size: 15px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer; text-transform: uppercase; margin-bottom: 15px;}
+        #status-box { background: rgba(0,0,0,0.4); padding: 12px; border-radius: 8px; border-left: 4px solid #f39c12; }
         .status-msg { font-size: 14px; font-weight: bold; }
         #hidden-canvas { display: none; }
-        #flash-overlay { position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: white; z-index: 9998; opacity: 0; pointer-events: none; transition: opacity 0.3s ease-out; }
+        #flash-overlay { position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: white; z-index: 9998; opacity: 0; pointer-events: none; transition: opacity 0.1s; }
     </style>
 </head>
 <body>
-
-    <div id="portrait-warning"><div>Gira el móvil a horizontal.</div></div>
-    <div id="camera-container">
-        <video id="video-preview" autoplay playsinline muted></video>
-        <canvas id="hidden-canvas"></canvas>
-    </div>
+    <div id="portrait-warning">Gira el móvil</div>
+    <div id="camera-container"><video id="video-preview" autoplay playsinline muted></video><canvas id="hidden-canvas"></canvas></div>
     <div id="flash-overlay"></div>
-
     <div id="controls-overlay">
-        <h2>Sensor Óptico</h2>
         <input type="text" id="api-url" placeholder="URL Cloudflare">
-        <button id="btn-conectar" onclick="iniciarSensor()">Cámara Activa</button>
-        <div id="status-box"><div class="status-title">Estado del Sistema</div><div class="status-msg" id="status-text">Desconectado</div></div>
+        <button id="btn-conectar" onclick="iniciarSensor()">Conectar Cámara</button>
+        <div id="status-box"><div class="status-msg" id="status-text">Desconectado</div></div>
     </div>
 
     <script>
@@ -46,80 +34,52 @@
         const canvas = document.getElementById('hidden-canvas');
         const ctx = canvas.getContext('2d');
         const flash = document.getElementById('flash-overlay');
-        let baseUrl = "";
-        let isConnected = false;
-        let isCapturing = false;
+        let baseUrl = ""; let isConnected = false;
 
         async function iniciarSensor() {
             baseUrl = document.getElementById('api-url').value.trim();
-            if (!baseUrl) { alert("Introduce la URL."); return; }
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } });
-                video.srcObject = stream;
-                document.getElementById('status-box').className = "active";
-                document.getElementById('status-text').innerText = "Conectando...";
-                document.getElementById('btn-conectar').style.background = "#27ae60";
-                isConnected = true;
-                
-                // REDUCIDO A 2.5 SEGUNDOS PARA NO QUEMAR EL MÓVIL
-                setInterval(consultarEstadoYActuar, 2500);
-            } catch (err) { alert("Error de cámara."); }
+            if (!baseUrl) return;
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+            video.srcObject = stream;
+            document.getElementById('status-text').innerText = "ESPERANDO AL PC...";
+            document.getElementById('btn-conectar').style.background = "#27ae60";
+            isConnected = true;
+            esperarOrdenDelPC(); // Iniciar bucle pasivo
         }
 
-        async function consultarEstadoYActuar() {
-            if (!isConnected || !baseUrl) return;
+        async function esperarOrdenDelPC() {
+            if (!isConnected) return;
             try {
-                // EVITAR CACHÉ DEL NAVEGADOR
-                const response = await fetch(`${baseUrl}/api/v1/estado?nocache=${Date.now()}`);
-                if (!response.ok) return;
-                const state = await response.json();
-                
-                if (state.fase_actual === 'tomar_foto' && !isCapturing) {
-                    isCapturing = true;
-                    document.getElementById('status-box').className = "active";
-                    document.getElementById('status-text').innerText = "📸 Procesando...";
-                    
-                    // EFECTO FLASH VISUAL
-                    flash.style.opacity = '0.8';
-                    setTimeout(() => { flash.style.opacity = '0'; }, 150);
-
-                    await enviarFrameAlineacion();
-                } else if (state.fase_actual === 'setup' && !isCapturing) {
-                    if (state.fiduciales_ok) {
-                        document.getElementById('status-box').className = "aligned";
-                        document.getElementById('status-text').innerText = "ALINEACIÓN OK";
-                    } else {
-                        document.getElementById('status-box').className = "active";
-                        document.getElementById('status-text').innerText = "Esperando orden...";
-                    }
+                // El navegador se queda "colgado" aquí sin gastar recursos hasta 20s
+                const res = await fetch(`${baseUrl}/api/v1/mobile/wait`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.disparar) await tomarFotoYSubir();
                 }
             } catch (err) {
-                // Errores silenciosos para no saturar
+                await new Promise(r => setTimeout(r, 2000)); // Si hay corte de red, espera 2s y reintenta
             }
+            if (isConnected) esperarOrdenDelPC(); // Volver a dormirse
         }
 
-        async function enviarFrameAlineacion() {
-            if (video.videoWidth === 0) { isCapturing = false; return; }
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
+        async function tomarFotoYSubir() {
+            if (video.videoWidth === 0) return;
             
-            // LIMPIAR CANVAS ANTES DE DIBUJAR PARA EVITAR FOTOS REPETIDAS
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // Flash visual
+            flash.style.opacity = '1'; setTimeout(() => { flash.style.opacity = '0'; }, 150);
+            document.getElementById('status-text').innerText = "📸 ENVIANDO FOTO...";
+
+            canvas.width = video.videoWidth; canvas.height = video.videoHeight;
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-            canvas.toBlob(async (blob) => {
-                const formData = new FormData();
-                // AÑADIR TIMESTAMP AL NOMBRE DEL ARCHIVO
-                formData.append('imagen', blob, `frame_${Date.now()}.jpg`);
-                try {
-                    const res = await fetch(`${baseUrl}/api/v1/alineacion`, { method: 'POST', body: formData });
-                    if (res.ok) {
-                        const fdControl = new FormData();
-                        fdControl.append('fase', 'setup');
-                        await fetch(`${baseUrl}/api/v1/control`, { method: 'POST', body: fdControl });
-                    }
-                } catch (err) {} finally { isCapturing = false; }
-            }, 'image/jpeg', 0.8);
+            return new Promise(resolve => {
+                canvas.toBlob(async (blob) => {
+                    const formData = new FormData(); formData.append('imagen', blob, 'frame.jpg');
+                    try { await fetch(`${baseUrl}/api/v1/mobile/upload`, { method: 'POST', body: formData }); } catch(e){}
+                    document.getElementById('status-text').innerText = "ESPERANDO AL PC...";
+                    resolve();
+                }, 'image/jpeg', 0.8);
+            });
         }
     </script>
 </body>
