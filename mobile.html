@@ -3,57 +3,51 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Launch Monitor - Sensor Móvil (Apaisado)</title>
+    <title>Launch Monitor - Sensor Móvil (HUD)</title>
     <style>
-        body { margin: 0; padding: 0; background-color: #000; color: #fff; font-family: 'Arial', sans-serif; overflow: hidden; display: flex; flex-direction: row; }
+        body { margin: 0; padding: 0; background-color: #000; color: #fff; font-family: 'Arial', sans-serif; overflow: hidden; }
         
-        /* ALERTA DE ORIENTACIÓN: Solo desaparece si el móvil está en horizontal */
         #portrait-warning { display: none; position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: #c0392b; z-index: 9999; align-items: center; justify-content: center; font-size: 24px; font-weight: bold; text-align: center; padding: 20px; flex-direction: column; box-sizing: border-box;}
-        @media screen and (orientation: portrait) {
-            #portrait-warning { display: flex; }
-        }
+        @media screen and (orientation: portrait) { #portrait-warning { display: flex; } }
 
-        /* Cámara a pantalla completa */
-        #camera-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; background: #111; }
+        /* Cámara a pantalla completa absoluta */
+        #camera-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; background: #000; }
         #video-preview { width: 100%; height: 100%; object-fit: cover; }
         
-        /* Panel de Controles Lateral (Derecha) */
-        #controls-overlay { position: absolute; top: 0; right: 0; width: 320px; height: 100vh; background: rgba(20, 20, 20, 0.85); z-index: 2; padding: 25px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; border-left: 2px solid #444; backdrop-filter: blur(5px);}
+        /* Panel Flotante HUD (derecha) */
+        #controls-overlay { position: absolute; top: 20px; right: 20px; width: 280px; background: rgba(15, 15, 15, 0.65); z-index: 2; padding: 20px; border-radius: 12px; box-sizing: border-box; backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 10px 30px rgba(0,0,0,0.5);}
         
-        h2 { margin: 0 0 20px 0; font-size: 18px; color: #f39c12; text-align: center; text-transform: uppercase;}
-        input[type="text"] { background: #222; color: #0f0; border: 1px solid #555; padding: 12px; border-radius: 6px; font-size: 14px; width: 100%; box-sizing: border-box; text-align: center; margin-bottom: 15px;}
-        button { background: #3498db; color: white; border: none; padding: 15px; font-size: 16px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer; text-transform: uppercase; margin-bottom: 20px; }
+        h2 { margin: 0 0 15px 0; font-size: 16px; color: #f39c12; text-align: center; text-transform: uppercase; letter-spacing: 1px;}
+        input[type="text"] { background: rgba(0,0,0,0.5); color: #0f0; border: 1px solid #555; padding: 12px; border-radius: 6px; font-size: 14px; width: 100%; box-sizing: border-box; text-align: center; margin-bottom: 15px;}
+        button { background: #3498db; color: white; border: none; padding: 14px; font-size: 15px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer; text-transform: uppercase; margin-bottom: 15px; transition: background 0.2s;}
         button:active { background: #2980b9; }
 
-        /* Estado del sistema */
-        #status-box { background: rgba(0,0,0,0.5); padding: 15px; border-radius: 8px; border-left: 4px solid #7f8c8d; }
+        /* Estado */
+        #status-box { background: rgba(0,0,0,0.4); padding: 12px; border-radius: 8px; border-left: 4px solid #7f8c8d; }
         #status-box.active { border-left-color: #f39c12; }
         #status-box.aligned { border-left-color: #2ecc71; }
-        .status-title { font-size: 12px; color: #aaa; margin-bottom: 5px; text-transform: uppercase;}
-        .status-msg { font-size: 15px; font-weight: bold; }
+        .status-title { font-size: 11px; color: #bbb; margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.5px;}
+        .status-msg { font-size: 14px; font-weight: bold; }
 
         #hidden-canvas { display: none; }
     </style>
 </head>
 <body>
 
-    <!-- Bloqueo Vertical -->
     <div id="portrait-warning">
         <svg fill="#fff" height="60px" width="60px" viewBox="0 0 24 24" style="margin-bottom:20px; transform: rotate(90deg);"><path d="M16 1H8C6.34 1 5 2.34 5 4v16c0 1.66 1.34 3 3 3h8c1.66 0 3-1.34 3-3V4c0-1.66-1.34-3-3-3zm1 17H7V4h10v14z"/></svg>
-        <div>Por favor, gira el móvil.<br><span style="font-size:16px; font-weight:normal;">El Launch Monitor solo funciona en horizontal.</span></div>
+        <div>Gira el móvil a horizontal.</div>
     </div>
 
-    <!-- Visor -->
     <div id="camera-container">
         <video id="video-preview" autoplay playsinline muted></video>
         <canvas id="hidden-canvas"></canvas>
     </div>
 
-    <!-- Controles -->
     <div id="controls-overlay">
         <h2>Sensor Óptico</h2>
         <input type="text" id="api-url" placeholder="URL Cloudflare">
-        <button id="btn-conectar" onclick="iniciarSensor()">Conectar y Esperar</button>
+        <button id="btn-conectar" onclick="iniciarSensor()">Cámara Activa</button>
         
         <div id="status-box">
             <div class="status-title">Estado del Sistema</div>
@@ -67,27 +61,24 @@
         const ctx = canvas.getContext('2d');
         let baseUrl = "";
         let isConnected = false;
+        let isCapturing = false;
 
         async function iniciarSensor() {
             baseUrl = document.getElementById('api-url').value.trim();
             if (!baseUrl) { alert("Introduce la URL."); return; }
 
             try {
-                // Pedir cámara forzando el formato apaisado
                 const stream = await navigator.mediaDevices.getUserMedia({ 
                     video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } 
                 });
                 video.srcObject = stream;
                 
                 document.getElementById('status-box').className = "active";
-                document.getElementById('status-text').innerText = "Esperando órdenes del PC...";
-                document.getElementById('btn-conectar').innerText = "Cámara Activa";
+                document.getElementById('status-text').innerText = "Esperando orden del PC...";
                 document.getElementById('btn-conectar').style.background = "#27ae60";
                 
                 isConnected = true;
-
-                // El móvil pregunta a la IA qué debe hacer cada 1 segundo
-                setInterval(consultarEstadoYActuar, 1000);
+                setInterval(consultarEstadoYActuar, 800);
 
             } catch (err) {
                 alert("Error de cámara. Recuerda usar HTTPS.");
@@ -101,32 +92,29 @@
                 const response = await fetch(`${baseUrl}/api/v1/estado`);
                 const state = await response.json();
 
-                // Si el PC ha pulsado "Iniciar Búsqueda", empezamos a hacer fotos
-                if (state.fase_actual === 'setup') {
+                // Si el PC ha pulsado el botón de "Tomar Foto"
+                if (state.fase_actual === 'tomar_foto' && !isCapturing) {
+                    isCapturing = true;
+                    document.getElementById('status-box').className = "active";
+                    document.getElementById('status-text').innerText = "📸 Capturando...";
+                    await enviarFrameAlineacion();
+                } 
+                // Estado normal post-foto
+                else if (state.fase_actual === 'setup') {
                     if (state.fiduciales_ok) {
                         document.getElementById('status-box').className = "aligned";
                         document.getElementById('status-text').innerText = "ALINEACIÓN CONFIRMADA";
                     } else {
                         document.getElementById('status-box').className = "active";
-                        document.getElementById('status-text').innerText = "Transmitiendo vídeo...";
-                        enviarFrameAlineacion();
+                        document.getElementById('status-text').innerText = "Esperando orden del PC...";
                     }
-                } 
-                // Si el PC está en otra fase, no mandamos fotos (Ahorro de batería)
-                else if (state.fase_actual === 'standby') {
-                    document.getElementById('status-box').className = "active";
-                    document.getElementById('status-text').innerText = "En reposo. Esperando al PC.";
-                }
-                else if (state.fase_actual === 'calibracion') {
-                    document.getElementById('status-box').className = "active";
-                    document.getElementById('status-text').innerText = "Modo Tarado (Gatillo Visual)";
                 }
             } catch (err) {
                 console.log("Error consultando estado", err);
             }
         }
 
-        function enviarFrameAlineacion() {
+        async function enviarFrameAlineacion() {
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -136,9 +124,18 @@
                 formData.append('imagen', blob, 'frame.jpg');
 
                 try {
+                    // 1. Enviamos la foto a Colab para que busque fiduciales
                     await fetch(`${baseUrl}/api/v1/alineacion`, { method: 'POST', body: formData });
-                } catch (err) {}
-            }, 'image/jpeg', 0.6);
+                    
+                    // 2. Le decimos al cerebro (Colab) que ya hemos terminado la foto para que no entre en bucle
+                    const fdControl = new FormData();
+                    fdControl.append('fase', 'setup');
+                    await fetch(`${baseUrl}/api/v1/control`, { method: 'POST', body: fdControl });
+                    
+                } catch (err) {} finally {
+                    isCapturing = false; // Liberamos el gatillo
+                }
+            }, 'image/jpeg', 0.8); // Calidad alta porque ahora solo enviamos 1 foto
         }
     </script>
 </body>
