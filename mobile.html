@@ -6,51 +6,33 @@
     <title>Launch Monitor - Sensor Móvil (HUD)</title>
     <style>
         body { margin: 0; padding: 0; background-color: #000; color: #fff; font-family: 'Arial', sans-serif; overflow: hidden; }
-        
         #portrait-warning { display: none; position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: #c0392b; z-index: 9999; align-items: center; justify-content: center; font-size: 24px; font-weight: bold; text-align: center; padding: 20px; flex-direction: column; box-sizing: border-box;}
         @media screen and (orientation: portrait) { #portrait-warning { display: flex; } }
-
         #camera-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; background: #000; }
         #video-preview { width: 100%; height: 100%; object-fit: cover; }
-        
         #controls-overlay { position: absolute; top: 20px; right: 20px; width: 280px; background: rgba(15, 15, 15, 0.65); z-index: 2; padding: 20px; border-radius: 12px; box-sizing: border-box; backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 10px 30px rgba(0,0,0,0.5);}
-        
         h2 { margin: 0 0 15px 0; font-size: 16px; color: #f39c12; text-align: center; text-transform: uppercase; letter-spacing: 1px;}
         input[type="text"] { background: rgba(0,0,0,0.5); color: #0f0; border: 1px solid #555; padding: 12px; border-radius: 6px; font-size: 14px; width: 100%; box-sizing: border-box; text-align: center; margin-bottom: 15px;}
         button { background: #3498db; color: white; border: none; padding: 14px; font-size: 15px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer; text-transform: uppercase; margin-bottom: 15px; transition: background 0.2s;}
         button:active { background: #2980b9; }
-
         #status-box { background: rgba(0,0,0,0.4); padding: 12px; border-radius: 8px; border-left: 4px solid #7f8c8d; }
         #status-box.active { border-left-color: #f39c12; }
         #status-box.aligned { border-left-color: #2ecc71; }
-        #status-box.error { border-left-color: #e74c3c; }
+        #status-box.error { border-left-color: #e74c3c; background: rgba(231, 76, 60, 0.2); }
         .status-title { font-size: 11px; color: #bbb; margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.5px;}
         .status-msg { font-size: 14px; font-weight: bold; }
-
         #hidden-canvas { display: none; }
     </style>
 </head>
 <body>
 
-    <div id="portrait-warning">
-        <svg fill="#fff" height="60px" width="60px" viewBox="0 0 24 24" style="margin-bottom:20px; transform: rotate(90deg);"><path d="M16 1H8C6.34 1 5 2.34 5 4v16c0 1.66 1.34 3 3 3h8c1.66 0 3-1.34 3-3V4c0-1.66-1.34-3-3-3zm1 17H7V4h10v14z"/></svg>
-        <div>Gira el móvil a horizontal.</div>
-    </div>
-
-    <div id="camera-container">
-        <video id="video-preview" autoplay playsinline muted></video>
-        <canvas id="hidden-canvas"></canvas>
-    </div>
-
+    <div id="portrait-warning"><svg fill="#fff" height="60px" width="60px" viewBox="0 0 24 24" style="margin-bottom:20px; transform: rotate(90deg);"><path d="M16 1H8C6.34 1 5 2.34 5 4v16c0 1.66 1.34 3 3 3h8c1.66 0 3-1.34 3-3V4c0-1.66-1.34-3-3-3zm1 17H7V4h10v14z"/></svg><div>Gira el móvil a horizontal.</div></div>
+    <div id="camera-container"><video id="video-preview" autoplay playsinline muted></video><canvas id="hidden-canvas"></canvas></div>
     <div id="controls-overlay">
         <h2>Sensor Óptico</h2>
         <input type="text" id="api-url" placeholder="URL Cloudflare">
         <button id="btn-conectar" onclick="iniciarSensor()">Cámara Activa</button>
-        
-        <div id="status-box">
-            <div class="status-title">Estado del Sistema</div>
-            <div class="status-msg" id="status-text">Desconectado</div>
-        </div>
+        <div id="status-box"><div class="status-title">Estado del Sistema</div><div class="status-msg" id="status-text">Desconectado</div></div>
     </div>
 
     <script>
@@ -60,34 +42,30 @@
         let baseUrl = "";
         let isConnected = false;
         let isCapturing = false;
+        let failCount = 0;
 
         async function iniciarSensor() {
             baseUrl = document.getElementById('api-url').value.trim();
             if (!baseUrl) { alert("Introduce la URL."); return; }
-
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } 
-                });
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } });
                 video.srcObject = stream;
-                
                 document.getElementById('status-box').className = "active";
-                document.getElementById('status-text').innerText = "Esperando orden del PC...";
+                document.getElementById('status-text').innerText = "Conectando a la nube...";
                 document.getElementById('btn-conectar').style.background = "#27ae60";
-                
                 isConnected = true;
                 setInterval(consultarEstadoYActuar, 800);
-            } catch (err) {
-                alert("Error de cámara: " + err.message);
-            }
+            } catch (err) { alert("Error de cámara."); }
         }
 
         async function consultarEstadoYActuar() {
             if (!isConnected || !baseUrl) return;
             try {
                 const response = await fetch(`${baseUrl}/api/v1/estado`);
+                if (!response.ok) throw new Error("Servidor no responde");
                 const state = await response.json();
-
+                failCount = 0; // Si conecta, reiniciamos el contador de fallos
+                
                 if (state.fase_actual === 'tomar_foto' && !isCapturing) {
                     isCapturing = true;
                     document.getElementById('status-box').className = "active";
@@ -102,62 +80,33 @@
                         document.getElementById('status-text').innerText = "Esperando orden del PC...";
                     }
                 }
-            } catch (err) {}
+            } catch (err) {
+                failCount++;
+                if (failCount > 2) {
+                    document.getElementById('status-box').className = "error";
+                    document.getElementById('status-text').innerText = "DESCONECTADO. Revisa la URL.";
+                }
+            }
         }
 
         async function enviarFrameAlineacion() {
-            // Verificación de seguridad 1: Comprobar que la cámara tiene dimensiones
-            if (video.videoWidth === 0 || video.videoHeight === 0) {
-                mostrarError("Error: Cámara sin inicializar");
-                return;
-            }
-
+            if (video.videoWidth === 0) { isCapturing = false; return; }
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
             canvas.toBlob(async (blob) => {
-                // Verificación de seguridad 2: Comprobar que se creó la foto
-                if (!blob) {
-                    mostrarError("Error: No se pudo crear la imagen");
-                    return;
-                }
-
                 const formData = new FormData();
                 formData.append('imagen', blob, 'frame.jpg');
-
                 try {
-                    // Envío a Colab
                     const res = await fetch(`${baseUrl}/api/v1/alineacion`, { method: 'POST', body: formData });
-                    
-                    // Verificación de seguridad 3: Si Colab falla (Error 500 o 400), abortar y avisar
-                    if (!res.ok) {
-                        throw new Error(`Colab rechazó la foto (Código HTTP ${res.status})`);
+                    if (res.ok) {
+                        const fdControl = new FormData();
+                        fdControl.append('fase', 'setup');
+                        await fetch(`${baseUrl}/api/v1/control`, { method: 'POST', body: fdControl });
                     }
-                    
-                    // Si todo va bien, le decimos a Colab que vuelva a setup
-                    const fdControl = new FormData();
-                    fdControl.append('fase', 'setup');
-                    await fetch(`${baseUrl}/api/v1/control`, { method: 'POST', body: fdControl });
-                    
-                } catch (err) {
-                    mostrarError(err.message);
-                } finally {
-                    isCapturing = false;
-                }
+                } catch (err) {} finally { isCapturing = false; }
             }, 'image/jpeg', 0.8);
-        }
-
-        function mostrarError(mensaje) {
-            document.getElementById('status-box').className = "error";
-            document.getElementById('status-text').innerText = mensaje;
-            alert(mensaje);
-            isCapturing = false;
-            
-            // Forzamos al PC a salir del bloqueo devolviéndolo a setup
-            const fdControl = new FormData();
-            fdControl.append('fase', 'setup');
-            fetch(`${baseUrl}/api/v1/control`, { method: 'POST', body: fdControl }).catch(()=>{});
         }
     </script>
 </body>
