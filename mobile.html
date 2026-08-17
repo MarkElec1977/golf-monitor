@@ -10,11 +10,9 @@
         #portrait-warning { display: none; position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: #c0392b; z-index: 9999; align-items: center; justify-content: center; font-size: 24px; font-weight: bold; text-align: center; padding: 20px; flex-direction: column; box-sizing: border-box;}
         @media screen and (orientation: portrait) { #portrait-warning { display: flex; } }
 
-        /* Cámara a pantalla completa absoluta */
         #camera-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; background: #000; }
         #video-preview { width: 100%; height: 100%; object-fit: cover; }
         
-        /* Panel Flotante HUD (derecha) */
         #controls-overlay { position: absolute; top: 20px; right: 20px; width: 280px; background: rgba(15, 15, 15, 0.65); z-index: 2; padding: 20px; border-radius: 12px; box-sizing: border-box; backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 10px 30px rgba(0,0,0,0.5);}
         
         h2 { margin: 0 0 15px 0; font-size: 16px; color: #f39c12; text-align: center; text-transform: uppercase; letter-spacing: 1px;}
@@ -22,10 +20,10 @@
         button { background: #3498db; color: white; border: none; padding: 14px; font-size: 15px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer; text-transform: uppercase; margin-bottom: 15px; transition: background 0.2s;}
         button:active { background: #2980b9; }
 
-        /* Estado */
         #status-box { background: rgba(0,0,0,0.4); padding: 12px; border-radius: 8px; border-left: 4px solid #7f8c8d; }
         #status-box.active { border-left-color: #f39c12; }
         #status-box.aligned { border-left-color: #2ecc71; }
+        #status-box.error { border-left-color: #e74c3c; }
         .status-title { font-size: 11px; color: #bbb; margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.5px;}
         .status-msg { font-size: 14px; font-weight: bold; }
 
@@ -79,28 +77,23 @@
                 
                 isConnected = true;
                 setInterval(consultarEstadoYActuar, 800);
-
             } catch (err) {
-                alert("Error de cámara. Recuerda usar HTTPS.");
+                alert("Error de cámara: " + err.message);
             }
         }
 
         async function consultarEstadoYActuar() {
             if (!isConnected || !baseUrl) return;
-
             try {
                 const response = await fetch(`${baseUrl}/api/v1/estado`);
                 const state = await response.json();
 
-                // Si el PC ha pulsado el botón de "Tomar Foto"
                 if (state.fase_actual === 'tomar_foto' && !isCapturing) {
                     isCapturing = true;
                     document.getElementById('status-box').className = "active";
-                    document.getElementById('status-text').innerText = "📸 Capturando...";
+                    document.getElementById('status-text').innerText = "📸 Procesando...";
                     await enviarFrameAlineacion();
-                } 
-                // Estado normal post-foto
-                else if (state.fase_actual === 'setup') {
+                } else if (state.fase_actual === 'setup' && !isCapturing) {
                     if (state.fiduciales_ok) {
                         document.getElementById('status-box').className = "aligned";
                         document.getElementById('status-text').innerText = "ALINEACIÓN CONFIRMADA";
@@ -109,33 +102,62 @@
                         document.getElementById('status-text').innerText = "Esperando orden del PC...";
                     }
                 }
-            } catch (err) {
-                console.log("Error consultando estado", err);
-            }
+            } catch (err) {}
         }
 
         async function enviarFrameAlineacion() {
+            // Verificación de seguridad 1: Comprobar que la cámara tiene dimensiones
+            if (video.videoWidth === 0 || video.videoHeight === 0) {
+                mostrarError("Error: Cámara sin inicializar");
+                return;
+            }
+
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
             canvas.toBlob(async (blob) => {
+                // Verificación de seguridad 2: Comprobar que se creó la foto
+                if (!blob) {
+                    mostrarError("Error: No se pudo crear la imagen");
+                    return;
+                }
+
                 const formData = new FormData();
                 formData.append('imagen', blob, 'frame.jpg');
 
                 try {
-                    // 1. Enviamos la foto a Colab para que busque fiduciales
-                    await fetch(`${baseUrl}/api/v1/alineacion`, { method: 'POST', body: formData });
+                    // Envío a Colab
+                    const res = await fetch(`${baseUrl}/api/v1/alineacion`, { method: 'POST', body: formData });
                     
-                    // 2. Le decimos al cerebro (Colab) que ya hemos terminado la foto para que no entre en bucle
+                    // Verificación de seguridad 3: Si Colab falla (Error 500 o 400), abortar y avisar
+                    if (!res.ok) {
+                        throw new Error(`Colab rechazó la foto (Código HTTP ${res.status})`);
+                    }
+                    
+                    // Si todo va bien, le decimos a Colab que vuelva a setup
                     const fdControl = new FormData();
                     fdControl.append('fase', 'setup');
                     await fetch(`${baseUrl}/api/v1/control`, { method: 'POST', body: fdControl });
                     
-                } catch (err) {} finally {
-                    isCapturing = false; // Liberamos el gatillo
+                } catch (err) {
+                    mostrarError(err.message);
+                } finally {
+                    isCapturing = false;
                 }
-            }, 'image/jpeg', 0.8); // Calidad alta porque ahora solo enviamos 1 foto
+            }, 'image/jpeg', 0.8);
+        }
+
+        function mostrarError(mensaje) {
+            document.getElementById('status-box').className = "error";
+            document.getElementById('status-text').innerText = mensaje;
+            alert(mensaje);
+            isCapturing = false;
+            
+            // Forzamos al PC a salir del bloqueo devolviéndolo a setup
+            const fdControl = new FormData();
+            fdControl.append('fase', 'setup');
+            fetch(`${baseUrl}/api/v1/control`, { method: 'POST', body: fdControl }).catch(()=>{});
         }
     </script>
 </body>
