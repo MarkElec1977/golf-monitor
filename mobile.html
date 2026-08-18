@@ -3,83 +3,233 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Launch Monitor - Sensor Móvil</title>
+    <title>Launch Monitor - Sensor Móvil (HUD)</title>
     <style>
-        body { margin: 0; background: #000; color: #fff; font-family: 'Arial', sans-serif; overflow: hidden; }
+        body { margin: 0; padding: 0; background-color: #000; color: #fff; font-family: 'Arial', sans-serif; overflow: hidden; }
         #portrait-warning { display: none; position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: #c0392b; z-index: 9999; align-items: center; justify-content: center; font-size: 24px; font-weight: bold; text-align: center;}
         @media screen and (orientation: portrait) { #portrait-warning { display: flex; } }
-        #camera-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; }
+        #camera-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; background: #000; }
         #video-preview { width: 100%; height: 100%; object-fit: cover; }
-        #controls-overlay { position: absolute; top: 20px; right: 20px; width: 280px; background: rgba(15,15,15,0.7); z-index: 2; padding: 20px; border-radius: 12px; backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.1); }
-        input { background: rgba(0,0,0,0.5); color: #0f0; border: 1px solid #555; padding: 12px; border-radius: 6px; font-size: 14px; width: 100%; box-sizing: border-box; text-align: center; margin-bottom: 15px;}
-        button { background: #3498db; color: white; border: none; padding: 14px; font-size: 15px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer; text-transform: uppercase; margin-bottom: 15px;}
-        #status-box { background: rgba(0,0,0,0.4); padding: 12px; border-radius: 8px; border-left: 4px solid #f39c12; }
+        #controls-overlay { position: absolute; top: 20px; right: 20px; width: 280px; background: rgba(15, 15, 15, 0.7); z-index: 2; padding: 20px; border-radius: 12px; backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 10px 30px rgba(0,0,0,0.5);}
+        h2 { margin: 0 0 15px 0; font-size: 16px; color: #f39c12; text-align: center; text-transform: uppercase; letter-spacing: 1px;}
+        input[type="text"] { background: rgba(0,0,0,0.5); color: #0f0; border: 1px solid #555; padding: 12px; border-radius: 6px; font-size: 14px; width: 100%; box-sizing: border-box; text-align: center; margin-bottom: 15px;}
+        button { background: #3498db; color: white; border: none; padding: 14px; font-size: 15px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer; text-transform: uppercase; margin-bottom: 15px; transition: background 0.2s;}
+        button:active { background: #2980b9; }
+        #status-box { background: rgba(0,0,0,0.4); padding: 12px; border-radius: 8px; border-left: 4px solid #7f8c8d; }
+        #status-box.active { border-left-color: #f39c12; }
+        #status-box.aligned { border-left-color: #2ecc71; }
+        #status-box.recording { border-left-color: #e74c3c; animation: pulse 1s infinite; }
+        .status-title { font-size: 11px; color: #bbb; margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.5px;}
         .status-msg { font-size: 14px; font-weight: bold; }
         #hidden-canvas { display: none; }
+        #radar-canvas { position: absolute; bottom: 20px; left: 20px; width: 128px; height: 72px; z-index: 2; border: 1px solid #fff; opacity: 0.5; background: #000; }
         #flash-overlay { position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: white; z-index: 9998; opacity: 0; pointer-events: none; transition: opacity 0.1s; }
+        @keyframes pulse { 0% { background-color: rgba(231, 76, 60, 0.2); } 50% { background-color: rgba(231, 76, 60, 0.5); } 100% { background-color: rgba(231, 76, 60, 0.2); } }
     </style>
 </head>
 <body>
-    <div id="portrait-warning">Gira el móvil</div>
-    <div id="camera-container"><video id="video-preview" autoplay playsinline muted></video><canvas id="hidden-canvas"></canvas></div>
+    <div id="portrait-warning"><div>Gira el móvil a horizontal.</div></div>
+    
+    <div id="camera-container">
+        <video id="video-preview" autoplay playsinline muted></video>
+        <canvas id="hidden-canvas"></canvas>
+        <canvas id="radar-canvas" width="64" height="36"></canvas> <!-- Radar miniatura -->
+    </div>
     <div id="flash-overlay"></div>
+    
     <div id="controls-overlay">
+        <h2>Sensor Óptico</h2>
         <input type="text" id="api-url" placeholder="URL Cloudflare">
-        <button id="btn-conectar" onclick="iniciarSensor()">Conectar Cámara</button>
-        <div id="status-box"><div class="status-msg" id="status-text">Desconectado</div></div>
+        <button id="btn-conectar" onclick="iniciarSensor()">Cámara Activa</button>
+        <div id="status-box"><div class="status-title">Estado del Sistema</div><div class="status-msg" id="status-text">Desconectado</div></div>
     </div>
 
     <script>
         const video = document.getElementById('video-preview');
         const canvas = document.getElementById('hidden-canvas');
         const ctx = canvas.getContext('2d');
+        const radarCanvas = document.getElementById('radar-canvas');
+        const radarCtx = radarCanvas.getContext('2d');
         const flash = document.getElementById('flash-overlay');
-        let baseUrl = ""; let isConnected = false;
+        
+        let baseUrl = "", isConnected = false;
+        
+        // Variables Radar y Buffer
+        let mediaRecorder = null;
+        let recordingChunks = [];
+        let calibracionActiva = false;
+        let radarInterval = null;
+        let prevPixels = null;
+        let motionHistoryX = [];
+        let streamGlobal = null;
+        let disparado = false;
 
         async function iniciarSensor() {
             baseUrl = document.getElementById('api-url').value.trim();
             if (!baseUrl) return;
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } });
-            video.srcObject = stream;
-            document.getElementById('status-text').innerText = "ESPERANDO AL PC...";
-            document.getElementById('btn-conectar').style.background = "#27ae60";
-            isConnected = true;
-            esperarOrdenDelPC(); // Iniciar bucle pasivo
+            try {
+                streamGlobal = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+                video.srcObject = streamGlobal;
+                document.getElementById('status-box').className = "active";
+                document.getElementById('status-text').innerText = "Sincronizado. Esperando órdenes...";
+                document.getElementById('btn-conectar').style.background = "#27ae60";
+                isConnected = true;
+                
+                // Polling relajado para saber la fase (batería a salvo)
+                setInterval(consultarEstado, 1500);
+            } catch (err) { alert("Error de cámara."); }
         }
 
-        async function esperarOrdenDelPC() {
+        async function consultarEstado() {
             if (!isConnected) return;
             try {
-                // El navegador se queda "colgado" aquí sin gastar recursos hasta 20s
-                const res = await fetch(`${baseUrl}/api/v1/mobile/wait`);
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.disparar) await tomarFotoYSubir();
+                const res = await fetch(`${baseUrl}/api/v1/estado?nocache=${Date.now()}`);
+                if (!res.ok) return;
+                const state = await res.json();
+                
+                // 1. FASE DE ALINEACIÓN (Foto estática a petición)
+                if (state.fase_actual === 'tomar_foto') {
+                    detenerRadar();
+                    document.getElementById('status-box').className = "active";
+                    document.getElementById('status-text').innerText = "📸 Procesando...";
+                    flash.style.opacity = '1'; setTimeout(() => { flash.style.opacity = '0'; }, 150);
+                    await enviarFrameAlineacion();
+                } 
+                else if (state.fase_actual === 'setup') {
+                    detenerRadar();
+                    document.getElementById('status-box').className = state.fiduciales_ok ? "aligned" : "active";
+                    document.getElementById('status-text').innerText = state.fiduciales_ok ? "ALINEACIÓN OK" : "Esperando orden...";
                 }
-            } catch (err) {
-                await new Promise(r => setTimeout(r, 2000)); // Si hay corte de red, espera 2s y reintenta
-            }
-            if (isConnected) esperarOrdenDelPC(); // Volver a dormirse
+                // 2. FASE DE TARADO (Gatillo de vídeo)
+                else if (state.fase_actual === 'calibracion' && !calibracionActiva) {
+                    iniciarRadar();
+                }
+            } catch (err) {}
         }
 
-        async function tomarFotoYSubir() {
+        // ====== LÓGICA DE FOTO (Alineación) ======
+        async function enviarFrameAlineacion() {
             if (video.videoWidth === 0) return;
-            
-            // Flash visual
-            flash.style.opacity = '1'; setTimeout(() => { flash.style.opacity = '0'; }, 150);
-            document.getElementById('status-text').innerText = "📸 ENVIANDO FOTO...";
-
             canvas.width = video.videoWidth; canvas.height = video.videoHeight;
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            canvas.toBlob(async (blob) => {
+                const fd = new FormData(); fd.append('imagen', blob, 'frame.jpg');
+                try {
+                    const res = await fetch(`${baseUrl}/api/v1/alineacion`, { method: 'POST', body: fd });
+                    if (res.ok) {
+                        const fdControl = new FormData(); fdControl.append('fase', 'setup');
+                        await fetch(`${baseUrl}/api/v1/control`, { method: 'POST', body: fdControl });
+                    }
+                } catch (err) {}
+            }, 'image/jpeg', 0.8);
+        }
 
-            return new Promise(resolve => {
-                canvas.toBlob(async (blob) => {
-                    const formData = new FormData(); formData.append('imagen', blob, 'frame.jpg');
-                    try { await fetch(`${baseUrl}/api/v1/mobile/upload`, { method: 'POST', body: formData }); } catch(e){}
-                    document.getElementById('status-text').innerText = "ESPERANDO AL PC...";
-                    resolve();
-                }, 'image/jpeg', 0.8);
-            });
+        // ====== LÓGICA DE VÍDEO Y RADAR (Tarado) ======
+        function iniciarRadar() {
+            calibracionActiva = true;
+            disparado = false;
+            recordingChunks = [];
+            
+            document.getElementById('status-box').className = "active";
+            document.getElementById('status-text').innerText = "RADAR ACTIVO. Patea la bola...";
+
+            // 1. Iniciar Buffer Circular de Vídeo
+            // Usamos un códec súper ligero y compatible
+            mediaRecorder = new MediaRecorder(streamGlobal, {mimeType: 'video/webm; codecs=vp8'});
+            mediaRecorder.ondataavailable = (e) => {
+                if(e.data.size > 0) {
+                    recordingChunks.push(e.data);
+                    // Mantenemos solo los últimos 6 trozos (3 segundos)
+                    if(recordingChunks.length > 6) recordingChunks.shift(); 
+                }
+            };
+            mediaRecorder.start(500); // Trocitos de medio segundo
+
+            // 2. Iniciar Algoritmo Pixel Difference (cada 50ms)
+            radarInterval = setInterval(detectarMovimiento, 50);
+        }
+
+        function detenerRadar() {
+            calibracionActiva = false;
+            if(radarInterval) clearInterval(radarInterval);
+            if(mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+        }
+
+        function detectarMovimiento() {
+            if(!calibracionActiva || disparado) return;
+
+            // Dibujar en el lienzo miniatura 64x36 para que el cálculo sea instantáneo
+            radarCtx.drawImage(video, 0, 0, 64, 36);
+            let frameData = radarCtx.getImageData(0, 0, 64, 36).data;
+            
+            if(!prevPixels) { prevPixels = new Uint8ClampedArray(frameData); return; }
+
+            let sumX = 0, diffCount = 0;
+            
+            // Analizar solo el canal de grises para acelerar
+            for(let i=0; i<frameData.length; i+=4) {
+                let rDiff = Math.abs(frameData[i] - prevPixels[i]);
+                if(rDiff > 35) { // Sensibilidad al cambio
+                    let x = (i/4) % 64;
+                    sumX += x;
+                    diffCount++;
+                }
+            }
+
+            // Si hay un bloque de píxeles cambiando (la bola/palo moviéndose)
+            if(diffCount > 40) {
+                let avgX = sumX / diffCount; // Centro de masas del movimiento
+                motionHistoryX.push(avgX);
+                if(motionHistoryX.length > 5) motionHistoryX.shift();
+
+                // Analizar la dirección
+                if(motionHistoryX.length === 5) {
+                    let deltaX = motionHistoryX[4] - motionHistoryX[0];
+                    // Si el centro de movimiento avanza hacia la DERECHA (+ delta)
+                    if(deltaX > 4) {
+                        ejecutarCapturaImpacto();
+                    }
+                }
+            } else {
+                // Si no hay movimiento, limpiar el historial para evitar falsos positivos
+                motionHistoryX = [];
+            }
+            
+            prevPixels.set(frameData);
+        }
+
+        function ejecutarCapturaImpacto() {
+            disparado = true;
+            clearInterval(radarInterval); // Apagar el radar
+            
+            document.getElementById('status-box').className = "recording";
+            document.getElementById('status-text').innerText = "¡IMPACTO! Guardando...";
+
+            // Dejamos grabar 1.2 segundos adicionales para capturar la bola rodando
+            setTimeout(() => {
+                mediaRecorder.stop();
+                
+                mediaRecorder.onstop = async () => {
+                    document.getElementById('status-text').innerText = "SUBIENDO VÍDEO A COLAB...";
+                    
+                    // Unir todos los trozos del buffer circular
+                    const finalBlob = new Blob(recordingChunks, { type: 'video/webm' });
+                    const fd = new FormData();
+                    fd.append('video', finalBlob, 'tarado.webm');
+
+                    try {
+                        const res = await fetch(`${baseUrl}/api/v1/calibrar`, { method: 'POST', body: fd });
+                        if(res.ok) {
+                            document.getElementById('status-box').className = "aligned";
+                            document.getElementById('status-text').innerText = "TARADO COMPLETADO";
+                        }
+                    } catch(e) {
+                        document.getElementById('status-text').innerText = "Error subiendo. Reintenta.";
+                    } finally {
+                        detenerRadar();
+                    }
+                };
+            }, 1200);
         }
     </script>
 </body>
