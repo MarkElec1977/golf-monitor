@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Sensor Móvil (Fotos)</title>
+    <title>Sensor Móvil (Fotos Seguras)</title>
     <style>
         body { margin: 0; padding: 0; background-color: #000; color: #fff; font-family: 'Arial', sans-serif; overflow: hidden; }
         #portrait-warning { display: none; position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: #c0392b; z-index: 9999; align-items: center; justify-content: center; font-size: 24px; font-weight: bold; text-align: center;}
@@ -33,7 +33,7 @@
     <div id="mobile-overlay"><div class="overlay-subtext" id="mobile-subtext"></div><div id="mobile-maintext"></div></div>
     
     <div id="controls-overlay">
-        <h2>Sensor Óptico (Fotos)</h2>
+        <h2>Sensor Óptico (Reloj Real)</h2>
         <input type="text" id="api-url" placeholder="URL Cloudflare">
         <button id="btn-conectar" onclick="iniciarSensor()">Cámara Activa</button>
         <div id="status-box"><div class="status-title">Estado del Sistema</div><div class="status-msg" id="status-text">Desconectado</div></div>
@@ -49,7 +49,8 @@
         const mobileSubtext = document.getElementById('mobile-subtext');
         
         let baseUrl = "", isConnected = false, isCapturing = false, isFetching = false;
-        let fotosRafaga = [], calibracionActiva = false, mainInterval = null, rafagaInterval = null;
+        let fotosRafaga = [], calibracionActiva = false, mainInterval = null;
+        let fetchStartTime = 0; // Cerrojo anti-cuelgues de red
 
         async function mantenerPantallaActiva() { try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch (err) {} }
 
@@ -70,19 +71,30 @@
                 document.getElementById('status-text').innerText = "Cámara lista. Ve al PC.";
                 document.getElementById('btn-conectar').style.background = "#27ae60";
                 isConnected = true;
+                
                 if(mainInterval) clearInterval(mainInterval);
                 mainInterval = setInterval(consultarEstado, 1000); 
             } catch (err) { alert("Error de cámara: " + err.message); }
         }
 
         async function consultarEstado() {
-            if (!isConnected || isFetching) return; 
+            if (!isConnected) return; 
+            
+            // Liberación forzada del cerrojo si la red se atasca más de 5 segundos
+            if (isFetching) {
+                if (Date.now() - fetchStartTime > 5000) isFetching = false;
+                return;
+            }
+            
             isFetching = true;
+            fetchStartTime = Date.now();
+            
             try {
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 4000);
                 const res = await fetch(`${baseUrl}/api/v1/estado?nocache=${Date.now()}`, { signal: controller.signal });
                 clearTimeout(timeoutId);
+                
                 if (!res.ok) throw new Error("Net");
                 const state = await res.json();
                 
@@ -98,7 +110,7 @@
                     document.getElementById('status-text').innerText = state.fiduciales_ok ? "ALINEACIÓN OK" : "Cámara lista. Ve al PC.";
                 }
                 else if (state.fase_actual === 'calibracion' && !calibracionActiva) {
-                    ejecutarRafagaFotos();
+                    ejecutarRafagaFotosAbsoluta(); // Nueva lógica de reloj atómico
                 }
             } catch (err) {} finally { isFetching = false; }
         }
@@ -119,52 +131,102 @@
             }, 'image/jpeg', 0.8);
         }
 
-        function ejecutarRafagaFotos() {
-            calibracionActiva = true; fotosRafaga = [];
-            mobileOverlay.style.display = 'flex'; mobileMaintext.style.color = '#f1c40f'; mobileSubtext.style.display = 'block';
+        // ==============================================================
+        // NUEVO RELOJ ABSOLUTO: Inmune a las suspensiones del navegador
+        // ==============================================================
+        let rafagaActiva = false;
+        let lastCaptureTime = 0;
+
+        function capturarFrame() {
+            if (!rafagaActiva) return;
+            let now = Date.now();
+            if (now - lastCaptureTime >= 60) { // 1 foto cada 60ms
+                if (video.videoWidth > 0) {
+                    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    fotosRafaga.push(canvas.toDataURL('image/jpeg', 0.6));
+                    lastCaptureTime = now;
+                }
+            }
+            requestAnimationFrame(capturarFrame);
+        }
+
+        function ejecutarRafagaFotosAbsoluta() {
+            calibracionActiva = true; 
+            fotosRafaga = [];
+            rafagaActiva = false;
+            
+            mobileOverlay.style.display = 'flex'; 
+            mobileMaintext.style.color = '#f1c40f'; 
+            mobileSubtext.style.display = 'block';
             mobileSubtext.innerText = "PREPARANDO...";
             
-            let count = 10; mobileMaintext.innerText = count;
-            chivarSincronizacion(count.toString());
+            const tiempoInicio = Date.now();
+            let ultimoSegundoReportado = -1;
 
-            const countInt = setInterval(() => {
-                count--;
-                if(!calibracionActiva) { clearInterval(countInt); if(rafagaInterval) clearInterval(rafagaInterval); return; } 
+            function tick() {
+                if (!calibracionActiva) return;
+
+                const tiempoTranscurrido = (Date.now() - tiempoInicio) / 1000;
                 
-                if(count > 0) {
-                    mobileMaintext.innerText = count;
-                    chivarSincronizacion(count.toString()); 
-                } else if(count === 0) {
-                    mobileSubtext.style.display = 'none';
-                    mobileMaintext.style.color = '#2ecc71'; mobileMaintext.innerText = "¡GO!";
-                    chivarSincronizacion("¡GO! (Patea)"); 
-                    
-                    // TOMAR 1 FOTO CADA 60ms
-                    rafagaInterval = setInterval(() => {
-                        if (video.videoWidth > 0) {
-                            canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-                            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                            fotosRafaga.push(canvas.toDataURL('image/jpeg', 0.6));
-                        }
-                    }, 60);
-                    
-                } else if(count === -3) { 
-                    clearInterval(countInt);
-                    clearInterval(rafagaInterval);
-                    
-                    mobileMaintext.style.color = '#e74c3c'; mobileMaintext.innerText = "¡FINISH!";
-                    chivarSincronizacion("¡FINISH!"); 
-                    setTimeout(() => { mobileOverlay.style.display = 'none'; }, 1500);
+                // SISTEMA ANTI-DORMIR: Si el tiempo ha saltado de golpe más de 12 segundos, cancelamos
+                if (tiempoTranscurrido > 15 && fotosRafaga.length === 0) {
+                    calibracionActiva = false;
+                    document.getElementById('status-box').className = "error";
+                    document.getElementById('status-text').innerText = "El navegador se durmió. Repite.";
+                    chivarSincronizacion("❌ MÓVIL SUSPENDIDO");
+                    mobileOverlay.style.display = 'none';
+                    return;
+                }
 
+                const conteoActual = Math.ceil(10 - tiempoTranscurrido);
+
+                if (conteoActual > 0) {
+                    // Solo refrescamos la pantalla y avisamos al PC si el número ha cambiado
+                    if (conteoActual !== ultimoSegundoReportado) {
+                        mobileMaintext.innerText = conteoActual;
+                        chivarSincronizacion(conteoActual.toString());
+                        ultimoSegundoReportado = conteoActual;
+                    }
+                    requestAnimationFrame(tick);
+                    
+                } else if (conteoActual <= 0 && conteoActual > -3) {
+                    // FASE DE GO! (3 segundos de captura)
+                    if (ultimoSegundoReportado !== 0) {
+                        mobileSubtext.style.display = 'none';
+                        mobileMaintext.style.color = '#2ecc71'; 
+                        mobileMaintext.innerText = "¡GO!";
+                        chivarSincronizacion("¡GO! (Patea)");
+                        ultimoSegundoReportado = 0;
+                        
+                        // Arrancamos el motor de captura de fotos
+                        rafagaActiva = true;
+                        capturarFrame();
+                    }
+                    requestAnimationFrame(tick);
+                    
+                } else {
+                    // FINISH
+                    rafagaActiva = false; // Apagamos la cámara de ráfaga
+                    calibracionActiva = false;
+                    
+                    mobileMaintext.style.color = '#e74c3c'; 
+                    mobileMaintext.innerText = "¡FINISH!";
+                    chivarSincronizacion("¡FINISH!"); 
+                    
+                    setTimeout(() => { mobileOverlay.style.display = 'none'; }, 1500);
                     enviarPaqueteDeFotosAColab();
                 }
-            }, 1000);
+            }
+            
+            // Arrancar el reloj
+            tick();
         }
 
         async function enviarPaqueteDeFotosAColab() {
             document.getElementById('status-box').className = "active";
             document.getElementById('status-text').innerText = `🚀 Enviando paquete (${fotosRafaga.length} fotos)...`;
-            chivarSincronizacion(`🚀 ENVIANDO PAQUETE DE ${fotosRafaga.length} FOTOS...`);
+            chivarSincronizacion(`🚀 ENVIANDO ${fotosRafaga.length} FOTOS...`);
 
             try {
                 const res = await fetch(`${baseUrl}/api/v1/calibrar_rafaga`, {
@@ -173,19 +235,21 @@
                     body: JSON.stringify({ fotos_b64: fotosRafaga })
                 });
                 
-                fotosRafaga = []; // Limpiar RAM
+                fotosRafaga = []; // Limpiar RAM inmediatamente
                 
                 if(!res.ok) {
                     const err = await res.json();
                     document.getElementById('status-box').className = "error";
                     document.getElementById('status-text').innerText = "❌ ERROR IA";
-                    chivarSincronizacion("❌ ERROR: " + err.detail);
+                    chivarSincronizacion("❌ ERROR IA: " + err.detail);
                 } else {
                     document.getElementById('status-box').className = "aligned";
                     document.getElementById('status-text').innerText = "✅ TARA CALCULADA";
-                    chivarSincronizacion("✅ IA PROCESANDO FOTOS...");
+                    chivarSincronizacion("✅ FOTOS PROCESADAS OK");
                 }
             } catch(e) { 
+                document.getElementById('status-box').className = "error";
+                document.getElementById('status-text').innerText = "❌ ERROR RED";
                 chivarSincronizacion("❌ ERROR DE RED"); 
                 fotosRafaga = [];
             }
