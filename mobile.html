@@ -14,17 +14,19 @@
         h2 { margin: 0 0 15px 0; font-size: 16px; color: #f39c12; text-align: center; text-transform: uppercase; letter-spacing: 1px;}
         input[type="text"] { background: rgba(0,0,0,0.5); color: #0f0; border: 1px solid #555; padding: 12px; border-radius: 6px; font-size: 14px; width: 100%; box-sizing: border-box; text-align: center; margin-bottom: 15px;}
         button { background: #3498db; color: white; border: none; padding: 14px; font-size: 15px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer; text-transform: uppercase; margin-bottom: 15px; transition: background 0.2s;}
-        button:active { background: #2980b9; }
+        
         #status-box { background: rgba(0,0,0,0.4); padding: 12px; border-radius: 8px; border-left: 4px solid #7f8c8d; }
         #status-box.active { border-left-color: #f39c12; }
         #status-box.aligned { border-left-color: #2ecc71; }
-        #status-box.recording { border-left-color: #e74c3c; animation: pulse 1s infinite; }
+        #status-box.recording { border-left-color: #e74c3c; background: rgba(231, 76, 60, 0.3);}
         .status-title { font-size: 11px; color: #bbb; margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.5px;}
         .status-msg { font-size: 14px; font-weight: bold; }
+        
         #hidden-canvas { display: none; }
-        #radar-canvas { position: absolute; bottom: 20px; left: 20px; width: 128px; height: 72px; z-index: 2; border: 1px solid #fff; opacity: 0.5; background: #000; }
         #flash-overlay { position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: white; z-index: 9998; opacity: 0; pointer-events: none; transition: opacity 0.1s; }
-        @keyframes pulse { 0% { background-color: rgba(231, 76, 60, 0.2); } 50% { background-color: rgba(231, 76, 60, 0.5); } 100% { background-color: rgba(231, 76, 60, 0.2); } }
+        
+        /* OVERLAY GIGANTE MÓVIL */
+        #mobile-overlay { position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.7); z-index: 9; display: none; align-items: center; justify-content: center; font-size: 150px; font-weight: bold; text-shadow: 0 0 20px black;}
     </style>
 </head>
 <body>
@@ -33,9 +35,9 @@
     <div id="camera-container">
         <video id="video-preview" autoplay playsinline muted></video>
         <canvas id="hidden-canvas"></canvas>
-        <canvas id="radar-canvas" width="64" height="36"></canvas> 
     </div>
     <div id="flash-overlay"></div>
+    <div id="mobile-overlay">5</div>
     
     <div id="controls-overlay">
         <h2>Sensor Óptico</h2>
@@ -48,39 +50,32 @@
         const video = document.getElementById('video-preview');
         const canvas = document.getElementById('hidden-canvas');
         const ctx = canvas.getContext('2d');
-        const radarCanvas = document.getElementById('radar-canvas');
-        const radarCtx = radarCanvas.getContext('2d');
         const flash = document.getElementById('flash-overlay');
+        const mobileOverlay = document.getElementById('mobile-overlay');
         
         let baseUrl = "", isConnected = false;
-        let isCapturing = false; // EL CERROJO DE SEGURIDAD
+        let isCapturing = false; 
         
+        // Variables de Ráfaga
         let mediaRecorder = null;
         let recordingChunks = [];
         let calibracionActiva = false;
-        let radarInterval = null;
-        let prevPixels = null;
-        let motionHistoryX = [];
-        let streamGlobal = null;
-        let disparado = false;
         let mainInterval = null;
 
         async function iniciarSensor() {
-            // VACUNA ANTI-BARRAS: Elimina las barras finales de la URL
             let rawUrl = document.getElementById('api-url').value.trim();
             baseUrl = rawUrl.replace(/\/+$/, "");
-            
             if (!baseUrl) return;
             try {
-                streamGlobal = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
-                video.srcObject = streamGlobal;
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+                video.srcObject = stream;
                 document.getElementById('status-box').className = "active";
                 document.getElementById('status-text').innerText = "Sincronizado. Esperando órdenes...";
                 document.getElementById('btn-conectar').style.background = "#27ae60";
                 isConnected = true;
                 
                 if(mainInterval) clearInterval(mainInterval);
-                mainInterval = setInterval(consultarEstado, 1500);
+                mainInterval = setInterval(consultarEstado, 1000); // Polling más rápido para pillar bien la orden
             } catch (err) { alert("Error de cámara."); }
         }
 
@@ -93,19 +88,23 @@
                 
                 if (state.fase_actual === 'tomar_foto' && !isCapturing) {
                     isCapturing = true; 
-                    detenerRadar();
                     document.getElementById('status-box').className = "active";
                     document.getElementById('status-text').innerText = "📸 Subiendo foto...";
                     flash.style.opacity = '1'; setTimeout(() => { flash.style.opacity = '0'; }, 150);
                     await enviarFrameAlineacion();
                 } 
                 else if (state.fase_actual === 'setup') {
-                    detenerRadar();
+                    calibracionActiva = false; // Reset por si venimos de repetir un tarado
                     document.getElementById('status-box').className = state.fiduciales_ok ? "aligned" : "active";
                     document.getElementById('status-text').innerText = state.fiduciales_ok ? "ALINEACIÓN OK" : "Esperando orden...";
                 }
                 else if (state.fase_actual === 'calibracion' && !calibracionActiva) {
-                    iniciarRadar();
+                    ejecutarRafagaTarado();
+                }
+                else if (state.fase_actual === 'practica') {
+                    calibracionActiva = false;
+                    document.getElementById('status-box').className = "recording";
+                    document.getElementById('status-text').innerText = "SISTEMA ARMADO. LISTO.";
                 }
             } catch (err) {}
         }
@@ -124,105 +123,79 @@
                         await fetch(`${baseUrl}/api/v1/control`, { method: 'POST', body: fdControl });
                     }
                 } catch (err) {
-                    console.error("Error subiendo foto:", err);
+                    console.log("Error subiendo foto");
                 } finally {
                     isCapturing = false; 
                 }
             }, 'image/jpeg', 0.8);
         }
 
-        function iniciarRadar() {
+        // ==========================================
+        // LA RÁFAGA (Gatillo por Temporizador)
+        // ==========================================
+        function ejecutarRafagaTarado() {
             calibracionActiva = true;
-            disparado = false;
             recordingChunks = [];
+            const statusBox = document.getElementById('status-box');
+            const statusText = document.getElementById('status-text');
+
+            // Mostrar cuenta atrás gigante
+            mobileOverlay.style.display = 'flex';
+            mobileOverlay.style.color = '#f1c40f'; // Amarillo
             
-            document.getElementById('status-box').className = "active";
-            document.getElementById('status-text').innerText = "RADAR ACTIVO. Patea la bola...";
+            let count = 5;
+            mobileOverlay.innerText = count;
+            statusBox.className = "active";
+            statusText.innerText = "PREPARANDO...";
 
-            mediaRecorder = new MediaRecorder(streamGlobal, {mimeType: 'video/webm; codecs=vp8'});
-            mediaRecorder.ondataavailable = (e) => {
-                if(e.data.size > 0) {
-                    recordingChunks.push(e.data);
-                    if(recordingChunks.length > 6) recordingChunks.shift(); 
-                }
-            };
-            mediaRecorder.start(500); 
-
-            radarInterval = setInterval(detectarMovimiento, 50);
-        }
-
-        function detenerRadar() {
-            calibracionActiva = false;
-            if(radarInterval) clearInterval(radarInterval);
-            if(mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
-        }
-
-        function detectarMovimiento() {
-            if(!calibracionActiva || disparado) return;
-
-            radarCtx.drawImage(video, 0, 0, 64, 36);
-            let frameData = radarCtx.getImageData(0, 0, 64, 36).data;
-            
-            if(!prevPixels) { prevPixels = new Uint8ClampedArray(frameData); return; }
-
-            let sumX = 0, diffCount = 0;
-            
-            for(let i=0; i<frameData.length; i+=4) {
-                let rDiff = Math.abs(frameData[i] - prevPixels[i]);
-                if(rDiff > 35) { 
-                    let x = (i/4) % 64;
-                    sumX += x;
-                    diffCount++;
-                }
-            }
-
-            if(diffCount > 40) {
-                let avgX = sumX / diffCount; 
-                motionHistoryX.push(avgX);
-                if(motionHistoryX.length > 5) motionHistoryX.shift();
-
-                if(motionHistoryX.length === 5) {
-                    let deltaX = motionHistoryX[4] - motionHistoryX[0];
-                    if(deltaX > 4) {
-                        ejecutarCapturaImpacto();
-                    }
-                }
-            } else {
-                motionHistoryX = [];
-            }
-            prevPixels.set(frameData);
-        }
-
-        function ejecutarCapturaImpacto() {
-            disparado = true;
-            clearInterval(radarInterval); 
-            
-            document.getElementById('status-box').className = "recording";
-            document.getElementById('status-text').innerText = "¡IMPACTO! Guardando...";
-
-            setTimeout(() => {
-                mediaRecorder.stop();
-                
-                mediaRecorder.onstop = async () => {
-                    document.getElementById('status-text').innerText = "SUBIENDO VÍDEO A COLAB...";
+            const countInt = setInterval(() => {
+                count--;
+                if(count > 0) {
+                    mobileOverlay.innerText = count;
+                } else if(count === 0) {
+                    mobileOverlay.style.color = '#2ecc71'; // Verde
+                    mobileOverlay.innerText = "¡GO!";
+                    statusBox.className = "recording";
+                    statusText.innerText = "🔴 GRABANDO PUTT...";
                     
-                    const finalBlob = new Blob(recordingChunks, { type: 'video/webm' });
-                    const fd = new FormData();
-                    fd.append('video', finalBlob, 'tarado.webm');
+                    // Iniciar ráfaga (grabador webm)
+                    mediaRecorder = new MediaRecorder(video.srcObject, {mimeType: 'video/webm; codecs=vp8'});
+                    mediaRecorder.ondataavailable = e => { if(e.data.size > 0) recordingChunks.push(e.data); };
+                    mediaRecorder.start();
+                    
+                } else if(count === -3) { // 3 segundos de grabación son suficientes
+                    clearInterval(countInt);
+                    mediaRecorder.stop();
+                    
+                    mobileOverlay.style.color = '#e74c3c'; // Rojo
+                    mobileOverlay.innerText = "¡FINISH!";
+                    statusBox.className = "active";
+                    statusText.innerText = "🚀 ENVIANDO AL PC...";
+                    
+                    setTimeout(() => { mobileOverlay.style.display = 'none'; }, 1500);
 
-                    try {
-                        const res = await fetch(`${baseUrl}/api/v1/calibrar`, { method: 'POST', body: fd });
-                        if(res.ok) {
-                            document.getElementById('status-box').className = "aligned";
-                            document.getElementById('status-text').innerText = "TARADO COMPLETADO";
+                    // Al detenerse, empaquetar y limpiar memoria
+                    mediaRecorder.onstop = async () => {
+                        const blob = new Blob(recordingChunks, { type: 'video/webm' });
+                        const fd = new FormData(); fd.append('video', blob, 'rafaga.webm');
+                        
+                        // BORRADO INMEDIATO DE LA MEMORIA DEL MÓVIL
+                        recordingChunks = []; 
+                        mediaRecorder = null;
+
+                        try {
+                            const res = await fetch(`${baseUrl}/api/v1/calibrar`, { method: 'POST', body: fd });
+                            if(res.ok) {
+                                statusBox.className = "aligned";
+                                statusText.innerText = "✅ ENVIADO. PROCESANDO...";
+                            }
+                        } catch(e) {
+                            statusBox.className = "error";
+                            statusText.innerText = "❌ ERROR DE RED.";
                         }
-                    } catch(e) {
-                        document.getElementById('status-text').innerText = "Error subiendo. Reintenta.";
-                    } finally {
-                        detenerRadar();
-                    }
-                };
-            }, 1200);
+                    };
+                }
+            }, 1000);
         }
     </script>
 </body>
