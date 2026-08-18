@@ -3,25 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Launch Monitor - Sensor Móvil (HUD)</title>
+    <title>Sensor Móvil (Fotos)</title>
     <style>
         body { margin: 0; padding: 0; background-color: #000; color: #fff; font-family: 'Arial', sans-serif; overflow: hidden; }
         #portrait-warning { display: none; position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: #c0392b; z-index: 9999; align-items: center; justify-content: center; font-size: 24px; font-weight: bold; text-align: center;}
         @media screen and (orientation: portrait) { #portrait-warning { display: flex; } }
         #camera-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; background: #000; }
         #video-preview { width: 100%; height: 100%; object-fit: cover; }
-        #controls-overlay { position: absolute; top: 20px; right: 20px; width: 280px; background: rgba(15, 15, 15, 0.7); z-index: 2; padding: 20px; border-radius: 12px; backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 10px 30px rgba(0,0,0,0.5);}
-        h2 { margin: 0 0 15px 0; font-size: 16px; color: #f39c12; text-align: center; text-transform: uppercase; letter-spacing: 1px;}
+        #controls-overlay { position: absolute; top: 20px; right: 20px; width: 280px; background: rgba(15, 15, 15, 0.7); z-index: 2; padding: 20px; border-radius: 12px; backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.15);}
+        h2 { margin: 0 0 15px 0; font-size: 16px; color: #f39c12; text-align: center; text-transform: uppercase;}
         input[type="text"] { background: rgba(0,0,0,0.5); color: #0f0; border: 1px solid #555; padding: 12px; border-radius: 6px; font-size: 14px; width: 100%; box-sizing: border-box; text-align: center; margin-bottom: 15px;}
-        button { background: #3498db; color: white; border: none; padding: 14px; font-size: 15px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer; text-transform: uppercase; margin-bottom: 15px; transition: background 0.2s;}
-        
+        button { background: #3498db; color: white; border: none; padding: 14px; font-size: 15px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer; text-transform: uppercase; margin-bottom: 15px;}
         #status-box { background: rgba(0,0,0,0.4); padding: 12px; border-radius: 8px; border-left: 4px solid #7f8c8d; }
         #status-box.active { border-left-color: #f39c12; }
         #status-box.aligned { border-left-color: #2ecc71; }
-        #status-box.recording { border-left-color: #e74c3c; background: rgba(231, 76, 60, 0.3);}
-        .status-title { font-size: 11px; color: #bbb; margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.5px;}
+        #status-box.error { border-left-color: #e74c3c; }
+        .status-title { font-size: 11px; color: #bbb; margin-bottom: 3px; text-transform: uppercase;}
         .status-msg { font-size: 14px; font-weight: bold; }
-        
         #hidden-canvas { display: none; }
         #flash-overlay { position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: white; z-index: 9998; opacity: 0; pointer-events: none; transition: opacity 0.1s; }
         #mobile-overlay { position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.7); z-index: 9; display: none; align-items: center; justify-content: center; font-size: 80px; font-weight: bold; text-shadow: 0 0 20px black; flex-direction: column; text-align: center;}
@@ -32,12 +30,10 @@
     <div id="portrait-warning"><div>Gira el móvil.</div></div>
     <div id="camera-container"><video id="video-preview" autoplay playsinline muted></video><canvas id="hidden-canvas"></canvas></div>
     <div id="flash-overlay"></div>
-    <div id="mobile-overlay">
-        <div class="overlay-subtext" id="mobile-subtext"></div>
-        <div id="mobile-maintext"></div>
-    </div>
+    <div id="mobile-overlay"><div class="overlay-subtext" id="mobile-subtext"></div><div id="mobile-maintext"></div></div>
+    
     <div id="controls-overlay">
-        <h2>Sensor Óptico</h2>
+        <h2>Sensor Óptico (Fotos)</h2>
         <input type="text" id="api-url" placeholder="URL Cloudflare">
         <button id="btn-conectar" onclick="iniciarSensor()">Cámara Activa</button>
         <div id="status-box"><div class="status-title">Estado del Sistema</div><div class="status-msg" id="status-text">Desconectado</div></div>
@@ -53,13 +49,9 @@
         const mobileSubtext = document.getElementById('mobile-subtext');
         
         let baseUrl = "", isConnected = false, isCapturing = false, isFetching = false;
-        let mediaRecorder = null, recordingChunks = [], calibracionActiva = false, practicaActiva = false, mainInterval = null;
-        let disparado = false;
-        let audioContext, analyser, dataArray;
+        let fotosRafaga = [], calibracionActiva = false, mainInterval = null, rafagaInterval = null;
 
-        async function mantenerPantallaActiva() {
-            try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch (err) {}
-        }
+        async function mantenerPantallaActiva() { try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch (err) {} }
 
         async function chivarSincronizacion(msg) {
             const fd = new FormData(); fd.append('sync_msg', msg);
@@ -72,28 +64,15 @@
             if (!baseUrl) return;
             try {
                 await mantenerPantallaActiva();
-                
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 120, max: 240 } }, 
-                    audio: true 
-                });
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
                 video.srcObject = stream;
-
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                analyser = audioContext.createAnalyser();
-                const microphone = audioContext.createMediaStreamSource(stream);
-                microphone.connect(analyser);
-                analyser.fftSize = 256;
-                dataArray = new Uint8Array(analyser.frequencyBinCount);
-
                 document.getElementById('status-box').className = "active";
                 document.getElementById('status-text').innerText = "Sincronizado. Esperando...";
                 document.getElementById('btn-conectar').style.background = "#27ae60";
                 isConnected = true;
-                
                 if(mainInterval) clearInterval(mainInterval);
                 mainInterval = setInterval(consultarEstado, 1000); 
-            } catch (err) { alert("Error de hardware: " + err.message); }
+            } catch (err) { alert("Error de cámara: " + err.message); }
         }
 
         async function consultarEstado() {
@@ -104,30 +83,22 @@
                 const timeoutId = setTimeout(() => controller.abort(), 4000);
                 const res = await fetch(`${baseUrl}/api/v1/estado?nocache=${Date.now()}`, { signal: controller.signal });
                 clearTimeout(timeoutId);
-                
                 if (!res.ok) throw new Error("Net");
                 const state = await res.json();
                 
                 if (state.fase_actual === 'tomar_foto' && !isCapturing) {
-                    isCapturing = true; 
-                    practicaActiva = false; calibracionActiva = false;
-                    document.getElementById('status-box').className = "active";
+                    isCapturing = true; calibracionActiva = false;
                     document.getElementById('status-text').innerText = "📸 Subiendo foto...";
                     flash.style.opacity = '1'; setTimeout(() => { flash.style.opacity = '0'; }, 150);
                     await enviarFrameAlineacion();
                 } 
                 else if (state.fase_actual === 'setup') {
-                    calibracionActiva = false; practicaActiva = false;
+                    calibracionActiva = false;
                     document.getElementById('status-box').className = state.fiduciales_ok ? "aligned" : "active";
                     document.getElementById('status-text').innerText = state.fiduciales_ok ? "ALINEACIÓN OK" : "Esperando orden...";
                 }
                 else if (state.fase_actual === 'calibracion' && !calibracionActiva) {
-                    practicaActiva = false;
-                    ejecutarRafagaTarado();
-                }
-                else if (state.fase_actual === 'practica' && !practicaActiva) {
-                    calibracionActiva = false;
-                    iniciarSesionPractica();
+                    ejecutarRafagaFotos();
                 }
             } catch (err) {} finally { isFetching = false; }
         }
@@ -148,8 +119,8 @@
             }, 'image/jpeg', 0.8);
         }
 
-        function ejecutarRafagaTarado() {
-            calibracionActiva = true; recordingChunks = [];
+        function ejecutarRafagaFotos() {
+            calibracionActiva = true; fotosRafaga = [];
             mobileOverlay.style.display = 'flex'; mobileMaintext.style.color = '#f1c40f'; mobileSubtext.style.display = 'block';
             mobileSubtext.innerText = "PREPARANDO...";
             
@@ -158,7 +129,7 @@
 
             const countInt = setInterval(() => {
                 count--;
-                if(!calibracionActiva) { clearInterval(countInt); return; } 
+                if(!calibracionActiva) { clearInterval(countInt); if(rafagaInterval) clearInterval(rafagaInterval); return; } 
                 
                 if(count > 0) {
                     mobileMaintext.innerText = count;
@@ -166,104 +137,58 @@
                 } else if(count === 0) {
                     mobileSubtext.style.display = 'none';
                     mobileMaintext.style.color = '#2ecc71'; mobileMaintext.innerText = "¡GO!";
-                    chivarSincronizacion("¡GO!"); 
+                    chivarSincronizacion("¡GO! (Patea)"); 
                     
-                    mediaRecorder = new MediaRecorder(video.srcObject, {mimeType: 'video/webm; codecs=vp8'});
-                    mediaRecorder.ondataavailable = e => { if(e.data.size > 0) recordingChunks.push(e.data); };
-                    mediaRecorder.start(500);
+                    // TOMAR 1 FOTO CADA 60ms
+                    rafagaInterval = setInterval(() => {
+                        if (video.videoWidth > 0) {
+                            canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+                            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                            fotosRafaga.push(canvas.toDataURL('image/jpeg', 0.6));
+                        }
+                    }, 60);
                     
                 } else if(count === -3) { 
                     clearInterval(countInt);
-                    mediaRecorder.stop();
+                    clearInterval(rafagaInterval);
                     
                     mobileMaintext.style.color = '#e74c3c'; mobileMaintext.innerText = "¡FINISH!";
                     chivarSincronizacion("¡FINISH!"); 
                     setTimeout(() => { mobileOverlay.style.display = 'none'; }, 1500);
 
-                    mediaRecorder.onstop = async () => {
-                        const blob = new Blob(recordingChunks, { type: 'video/webm' });
-                        const fd = new FormData(); fd.append('video', blob, 'rafaga.webm');
-                        recordingChunks = []; mediaRecorder = null;
-
-                        chivarSincronizacion("🚀 ENVIANDO...");
-                        try {
-                            const res = await fetch(`${baseUrl}/api/v1/calibrar`, { method: 'POST', body: fd });
-                            if(res.ok) chivarSincronizacion("✅ IA PROCESANDO...");
-                        } catch(e) { chivarSincronizacion("❌ ERROR EN LA RED"); }
-                    };
+                    enviarPaqueteDeFotosAColab();
                 }
             }, 1000);
         }
 
-        function iniciarSesionPractica() {
-            practicaActiva = true; disparado = false; recordingChunks = [];
+        async function enviarPaqueteDeFotosAColab() {
+            document.getElementById('status-box').className = "active";
+            document.getElementById('status-text').innerText = `🚀 Enviando paquete (${fotosRafaga.length} fotos)...`;
+            chivarSincronizacion(`🚀 ENVIANDO PAQUETE DE ${fotosRafaga.length} FOTOS...`);
 
-            mobileOverlay.style.display = 'flex';
-            mobileSubtext.style.display = 'none';
-            mobileMaintext.style.color = '#3498db'; 
-            mobileMaintext.innerText = "ESPERANDO";
-            
-            chivarSincronizacion("ESPERANDO IMPACTO...");
-            document.getElementById('status-box').className = "recording";
-            document.getElementById('status-text').innerText = "ESCUCHANDO MICRO...";
-
-            mediaRecorder = new MediaRecorder(video.srcObject, {mimeType: 'video/webm; codecs=vp8'});
-            mediaRecorder.ondataavailable = e => {
-                if(e.data.size > 0) {
-                    recordingChunks.push(e.data);
-                    if(recordingChunks.length > 4) recordingChunks.shift();
-                }
-            };
-            mediaRecorder.start(500);
-            escucharMicrofono();
-        }
-
-        function escucharMicrofono() {
-            if(!practicaActiva || disparado) return;
-
-            analyser.getByteFrequencyData(dataArray);
-            let peakVolume = Math.max(...dataArray); 
-
-            if(peakVolume > 200) { 
-                ejecutarCapturaGolpe();
-            } else {
-                requestAnimationFrame(escucharMicrofono);
-            }
-        }
-
-        function ejecutarCapturaGolpe() {
-            disparado = true;
-            
-            mobileMaintext.style.color = '#e74c3c'; 
-            mobileMaintext.innerText = "¡IMPACTO!";
-            chivarSincronizacion("¡¡¡IMPACTO!!!");
-
-            setTimeout(() => {
-                if(mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+            try {
+                const res = await fetch(`${baseUrl}/api/v1/calibrar_rafaga`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fotos_b64: fotosRafaga })
+                });
                 
-                mediaRecorder.onstop = async () => {
-                    mobileMaintext.style.color = '#fff';
-                    mobileMaintext.innerText = "ANALIZANDO";
-                    chivarSincronizacion("🚀 ENVIANDO A COLAB...");
-
-                    const blob = new Blob(recordingChunks, { type: 'video/webm' });
-                    const fd = new FormData(); fd.append('video', blob, 'golpe.webm');
-                    recordingChunks = []; mediaRecorder = null;
-
-                    try {
-                        const res = await fetch(`${baseUrl}/api/v1/analizar`, { method: 'POST', body: fd });
-                        if(res.ok) {
-                            mobileMaintext.style.color = '#2ecc71';
-                            mobileMaintext.innerText = "LISTO";
-                            chivarSincronizacion("✅ TELEMETRÍA OK");
-                            
-                            setTimeout(() => {
-                                if(practicaActiva) practicaActiva = false; 
-                            }, 4000);
-                        }
-                    } catch(e) { chivarSincronizacion("❌ ERROR EN LA RED"); }
-                };
-            }, 800);
+                fotosRafaga = []; // Limpiar RAM Inmediatamente
+                
+                if(!res.ok) {
+                    const err = await res.json();
+                    document.getElementById('status-box').className = "error";
+                    document.getElementById('status-text').innerText = "❌ ERROR IA";
+                    chivarSincronizacion("❌ ERROR: " + err.detail);
+                } else {
+                    document.getElementById('status-box').className = "aligned";
+                    document.getElementById('status-text').innerText = "✅ TARA CALCULADA";
+                    chivarSincronizacion("✅ IA PROCESANDO FOTOS...");
+                }
+            } catch(e) { 
+                chivarSincronizacion("❌ ERROR DE RED"); 
+                fotosRafaga = [];
+            }
         }
     </script>
 </body>
