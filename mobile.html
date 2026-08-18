@@ -24,25 +24,18 @@
         
         #hidden-canvas { display: none; }
         #flash-overlay { position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: white; z-index: 9998; opacity: 0; pointer-events: none; transition: opacity 0.1s; }
-        
-        /* OVERLAY GIGANTE MÓVIL */
-        #mobile-overlay { position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.7); z-index: 9; display: none; align-items: center; justify-content: center; font-size: 150px; font-weight: bold; text-shadow: 0 0 20px black; flex-direction: column;}
+        #mobile-overlay { position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.7); z-index: 9; display: none; align-items: center; justify-content: center; font-size: 80px; font-weight: bold; text-shadow: 0 0 20px black; flex-direction: column; text-align: center;}
         .overlay-subtext { font-size: 24px; color: #aaa; margin-bottom: 10px; text-shadow: none; font-weight: normal; }
     </style>
 </head>
 <body>
-    <div id="portrait-warning"><div>Gira el móvil a horizontal.</div></div>
-    
-    <div id="camera-container">
-        <video id="video-preview" autoplay playsinline muted></video>
-        <canvas id="hidden-canvas"></canvas>
-    </div>
+    <div id="portrait-warning"><div>Gira el móvil.</div></div>
+    <div id="camera-container"><video id="video-preview" autoplay playsinline muted></video><canvas id="hidden-canvas"></canvas></div>
     <div id="flash-overlay"></div>
     <div id="mobile-overlay">
-        <div class="overlay-subtext" id="mobile-subtext">PREPARANDO...</div>
-        <div id="mobile-maintext">10</div>
+        <div class="overlay-subtext" id="mobile-subtext"></div>
+        <div id="mobile-maintext"></div>
     </div>
-    
     <div id="controls-overlay">
         <h2>Sensor Óptico</h2>
         <input type="text" id="api-url" placeholder="URL Cloudflare">
@@ -59,26 +52,18 @@
         const mobileMaintext = document.getElementById('mobile-maintext');
         const mobileSubtext = document.getElementById('mobile-subtext');
         
-        let baseUrl = "", isConnected = false;
-        let isCapturing = false; 
-        let isFetching = false; // Cerrojo para evitar atascos de red
-        let wakeLock = null; // Control de pantalla activa
-        
-        let mediaRecorder = null;
-        let recordingChunks = [];
-        let calibracionActiva = false;
-        let mainInterval = null;
+        let baseUrl = "", isConnected = false, isCapturing = false, isFetching = false;
+        let mediaRecorder = null, recordingChunks = [], calibracionActiva = false, practicaActiva = false, mainInterval = null;
+        let disparado = false;
+        let audioContext, analyser, dataArray;
 
-        // Forzar a la pantalla a no apagarse nunca
         async function mantenerPantallaActiva() {
-            try {
-                if ('wakeLock' in navigator) {
-                    wakeLock = await navigator.wakeLock.request('screen');
-                    console.log('Wake Lock activado: Pantalla protegida contra suspensión');
-                }
-            } catch (err) {
-                console.warn('Wake Lock no soportado en este navegador');
-            }
+            try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch (err) {}
+        }
+
+        async function chivarSincronizacion(msg) {
+            const fd = new FormData(); fd.append('sync_msg', msg);
+            fetch(`${baseUrl}/api/v1/control`, { method: 'POST', body: fd }).catch(()=>{});
         }
 
         async function iniciarSensor() {
@@ -86,67 +71,71 @@
             baseUrl = rawUrl.replace(/\/+$/, "");
             if (!baseUrl) return;
             try {
-                await mantenerPantallaActiva(); // Activamos anti-suspensión
+                await mantenerPantallaActiva();
                 
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 120, max: 240 } }, 
+                    audio: true 
+                });
                 video.srcObject = stream;
+
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                const microphone = audioContext.createMediaStreamSource(stream);
+                microphone.connect(analyser);
+                analyser.fftSize = 256;
+                dataArray = new Uint8Array(analyser.frequencyBinCount);
+
                 document.getElementById('status-box').className = "active";
-                document.getElementById('status-text').innerText = "Sincronizado. Esperando órdenes...";
+                document.getElementById('status-text').innerText = "Sincronizado. Esperando...";
                 document.getElementById('btn-conectar').style.background = "#27ae60";
                 isConnected = true;
                 
                 if(mainInterval) clearInterval(mainInterval);
                 mainInterval = setInterval(consultarEstado, 1000); 
-            } catch (err) { alert("Error de cámara: " + err.message); }
+            } catch (err) { alert("Error de hardware: " + err.message); }
         }
 
         async function consultarEstado() {
-            if (!isConnected || isFetching) return; // Si ya hay una petición en curso, saltamos este turno
+            if (!isConnected || isFetching) return; 
             isFetching = true;
-            
             try {
-                // TimeOut manual de 4 segundos para evitar atascos de red
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 4000);
-                
                 const res = await fetch(`${baseUrl}/api/v1/estado?nocache=${Date.now()}`, { signal: controller.signal });
                 clearTimeout(timeoutId);
                 
-                if (!res.ok) throw new Error("Status no OK");
+                if (!res.ok) throw new Error("Net");
                 const state = await res.json();
                 
                 if (state.fase_actual === 'tomar_foto' && !isCapturing) {
                     isCapturing = true; 
+                    practicaActiva = false; calibracionActiva = false;
                     document.getElementById('status-box').className = "active";
                     document.getElementById('status-text').innerText = "📸 Subiendo foto...";
                     flash.style.opacity = '1'; setTimeout(() => { flash.style.opacity = '0'; }, 150);
                     await enviarFrameAlineacion();
                 } 
                 else if (state.fase_actual === 'setup') {
-                    calibracionActiva = false; 
+                    calibracionActiva = false; practicaActiva = false;
                     document.getElementById('status-box').className = state.fiduciales_ok ? "aligned" : "active";
                     document.getElementById('status-text').innerText = state.fiduciales_ok ? "ALINEACIÓN OK" : "Esperando orden...";
                 }
                 else if (state.fase_actual === 'calibracion' && !calibracionActiva) {
+                    practicaActiva = false;
                     ejecutarRafagaTarado();
                 }
-                else if (state.fase_actual === 'practica') {
+                else if (state.fase_actual === 'practica' && !practicaActiva) {
                     calibracionActiva = false;
-                    document.getElementById('status-box').className = "recording";
-                    document.getElementById('status-text').innerText = "🔴 SISTEMA ARMADO";
+                    iniciarSesionPractica();
                 }
-            } catch (err) {
-                // Errores silenciosos o microcortes
-            } finally {
-                isFetching = false; // Liberamos el cerrojo
-            }
+            } catch (err) {} finally { isFetching = false; }
         }
 
         async function enviarFrameAlineacion() {
             if (video.videoWidth === 0) { isCapturing = false; return; }
             canvas.width = video.videoWidth; canvas.height = video.videoHeight;
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            
             canvas.toBlob(async (blob) => {
                 const fd = new FormData(); fd.append('imagen', blob, 'frame.jpg');
                 try {
@@ -155,40 +144,29 @@
                         const fdControl = new FormData(); fdControl.append('fase', 'setup');
                         await fetch(`${baseUrl}/api/v1/control`, { method: 'POST', body: fdControl });
                     }
-                } catch (err) {} finally {
-                    isCapturing = false; 
-                }
+                } catch (err) {} finally { isCapturing = false; }
             }, 'image/jpeg', 0.8);
         }
 
-        // ==========================================
-        // LA RÁFAGA INTELIGENTE (10s)
-        // ==========================================
         function ejecutarRafagaTarado() {
-            calibracionActiva = true;
-            recordingChunks = [];
-            const statusBox = document.getElementById('status-box');
-            const statusText = document.getElementById('status-text');
-
-            mobileOverlay.style.display = 'flex';
-            mobileMaintext.style.color = '#f1c40f'; 
-            mobileSubtext.style.display = 'block';
+            calibracionActiva = true; recordingChunks = [];
+            mobileOverlay.style.display = 'flex'; mobileMaintext.style.color = '#f1c40f'; mobileSubtext.style.display = 'block';
+            mobileSubtext.innerText = "PREPARANDO...";
             
-            let count = 10;
-            mobileMaintext.innerText = count;
-            statusBox.className = "active";
-            statusText.innerText = "PREPARANDO...";
+            let count = 10; mobileMaintext.innerText = count;
+            chivarSincronizacion(count.toString());
 
             const countInt = setInterval(() => {
                 count--;
+                if(!calibracionActiva) { clearInterval(countInt); return; } 
+                
                 if(count > 0) {
                     mobileMaintext.innerText = count;
+                    chivarSincronizacion(count.toString()); 
                 } else if(count === 0) {
                     mobileSubtext.style.display = 'none';
-                    mobileMaintext.style.color = '#2ecc71'; 
-                    mobileMaintext.innerText = "¡GO!";
-                    statusBox.className = "recording";
-                    statusText.innerText = "🔴 GRABANDO PUTT...";
+                    mobileMaintext.style.color = '#2ecc71'; mobileMaintext.innerText = "¡GO!";
+                    chivarSincronizacion("¡GO!"); 
                     
                     mediaRecorder = new MediaRecorder(video.srcObject, {mimeType: 'video/webm; codecs=vp8'});
                     mediaRecorder.ondataavailable = e => { if(e.data.size > 0) recordingChunks.push(e.data); };
@@ -198,39 +176,94 @@
                     clearInterval(countInt);
                     mediaRecorder.stop();
                     
-                    mobileMaintext.style.color = '#e74c3c'; 
-                    mobileMaintext.innerText = "¡FINISH!";
-                    
+                    mobileMaintext.style.color = '#e74c3c'; mobileMaintext.innerText = "¡FINISH!";
+                    chivarSincronizacion("¡FINISH!"); 
                     setTimeout(() => { mobileOverlay.style.display = 'none'; }, 1500);
 
                     mediaRecorder.onstop = async () => {
                         const blob = new Blob(recordingChunks, { type: 'video/webm' });
-                        const sizeKB = (blob.size / 1024).toFixed(1); // TRANSPARENCIA VISUAL DE DATOS
-                        
-                        statusBox.className = "active";
-                        statusText.innerText = `🚀 SUBIENDO (${sizeKB} KB)...`;
-                        
                         const fd = new FormData(); fd.append('video', blob, 'rafaga.webm');
-                        
-                        // BORRADO INMEDIATO DE MEMORIA RAM
-                        recordingChunks = []; 
-                        mediaRecorder = null;
+                        recordingChunks = []; mediaRecorder = null;
 
+                        chivarSincronizacion("🚀 ENVIANDO...");
                         try {
                             const res = await fetch(`${baseUrl}/api/v1/calibrar`, { method: 'POST', body: fd });
-                            if(res.ok) {
-                                statusBox.className = "aligned";
-                                statusText.innerText = "✅ ENVIADO A COLAB";
-                            } else {
-                                throw new Error("Colab rechazó el vídeo");
-                            }
-                        } catch(e) {
-                            statusBox.className = "error";
-                            statusText.innerText = "❌ ERROR DE RED";
-                        }
+                            if(res.ok) chivarSincronizacion("✅ IA PROCESANDO...");
+                        } catch(e) { chivarSincronizacion("❌ ERROR EN LA RED"); }
                     };
                 }
             }, 1000);
+        }
+
+        function iniciarSesionPractica() {
+            practicaActiva = true; disparado = false; recordingChunks = [];
+
+            mobileOverlay.style.display = 'flex';
+            mobileSubtext.style.display = 'none';
+            mobileMaintext.style.color = '#3498db'; 
+            mobileMaintext.innerText = "ESPERANDO";
+            
+            chivarSincronizacion("ESPERANDO IMPACTO...");
+            document.getElementById('status-box').className = "recording";
+            document.getElementById('status-text').innerText = "ESCUCHANDO MICRO...";
+
+            mediaRecorder = new MediaRecorder(video.srcObject, {mimeType: 'video/webm; codecs=vp8'});
+            mediaRecorder.ondataavailable = e => {
+                if(e.data.size > 0) {
+                    recordingChunks.push(e.data);
+                    if(recordingChunks.length > 4) recordingChunks.shift();
+                }
+            };
+            mediaRecorder.start(500);
+            escucharMicrofono();
+        }
+
+        function escucharMicrofono() {
+            if(!practicaActiva || disparado) return;
+
+            analyser.getByteFrequencyData(dataArray);
+            let peakVolume = Math.max(...dataArray); 
+
+            if(peakVolume > 200) { 
+                ejecutarCapturaGolpe();
+            } else {
+                requestAnimationFrame(escucharMicrofono);
+            }
+        }
+
+        function ejecutarCapturaGolpe() {
+            disparado = true;
+            
+            mobileMaintext.style.color = '#e74c3c'; 
+            mobileMaintext.innerText = "¡IMPACTO!";
+            chivarSincronizacion("¡¡¡IMPACTO!!!");
+
+            setTimeout(() => {
+                if(mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+                
+                mediaRecorder.onstop = async () => {
+                    mobileMaintext.style.color = '#fff';
+                    mobileMaintext.innerText = "ANALIZANDO";
+                    chivarSincronizacion("🚀 ENVIANDO A COLAB...");
+
+                    const blob = new Blob(recordingChunks, { type: 'video/webm' });
+                    const fd = new FormData(); fd.append('video', blob, 'golpe.webm');
+                    recordingChunks = []; mediaRecorder = null;
+
+                    try {
+                        const res = await fetch(`${baseUrl}/api/v1/analizar`, { method: 'POST', body: fd });
+                        if(res.ok) {
+                            mobileMaintext.style.color = '#2ecc71';
+                            mobileMaintext.innerText = "LISTO";
+                            chivarSincronizacion("✅ TELEMETRÍA OK");
+                            
+                            setTimeout(() => {
+                                if(practicaActiva) practicaActiva = false; 
+                            }, 4000);
+                        }
+                    } catch(e) { chivarSincronizacion("❌ ERROR EN LA RED"); }
+                };
+            }, 800);
         }
     </script>
 </body>
