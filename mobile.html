@@ -33,7 +33,7 @@
     <div id="camera-container">
         <video id="video-preview" autoplay playsinline muted></video>
         <canvas id="hidden-canvas"></canvas>
-        <canvas id="radar-canvas" width="64" height="36"></canvas> <!-- Radar miniatura -->
+        <canvas id="radar-canvas" width="64" height="36"></canvas> 
     </div>
     <div id="flash-overlay"></div>
     
@@ -53,8 +53,8 @@
         const flash = document.getElementById('flash-overlay');
         
         let baseUrl = "", isConnected = false;
+        let isCapturing = false; // EL CERROJO DE SEGURIDAD
         
-        // Variables Radar y Buffer
         let mediaRecorder = null;
         let recordingChunks = [];
         let calibracionActiva = false;
@@ -63,9 +63,13 @@
         let motionHistoryX = [];
         let streamGlobal = null;
         let disparado = false;
+        let mainInterval = null;
 
         async function iniciarSensor() {
-            baseUrl = document.getElementById('api-url').value.trim();
+            // VACUNA ANTI-BARRAS: Elimina las barras finales de la URL
+            let rawUrl = document.getElementById('api-url').value.trim();
+            baseUrl = rawUrl.replace(/\/+$/, "");
+            
             if (!baseUrl) return;
             try {
                 streamGlobal = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
@@ -75,8 +79,8 @@
                 document.getElementById('btn-conectar').style.background = "#27ae60";
                 isConnected = true;
                 
-                // Polling relajado para saber la fase (batería a salvo)
-                setInterval(consultarEstado, 1500);
+                if(mainInterval) clearInterval(mainInterval);
+                mainInterval = setInterval(consultarEstado, 1500);
             } catch (err) { alert("Error de cámara."); }
         }
 
@@ -87,11 +91,11 @@
                 if (!res.ok) return;
                 const state = await res.json();
                 
-                // 1. FASE DE ALINEACIÓN (Foto estática a petición)
-                if (state.fase_actual === 'tomar_foto') {
+                if (state.fase_actual === 'tomar_foto' && !isCapturing) {
+                    isCapturing = true; 
                     detenerRadar();
                     document.getElementById('status-box').className = "active";
-                    document.getElementById('status-text').innerText = "📸 Procesando...";
+                    document.getElementById('status-text').innerText = "📸 Subiendo foto...";
                     flash.style.opacity = '1'; setTimeout(() => { flash.style.opacity = '0'; }, 150);
                     await enviarFrameAlineacion();
                 } 
@@ -100,18 +104,17 @@
                     document.getElementById('status-box').className = state.fiduciales_ok ? "aligned" : "active";
                     document.getElementById('status-text').innerText = state.fiduciales_ok ? "ALINEACIÓN OK" : "Esperando orden...";
                 }
-                // 2. FASE DE TARADO (Gatillo de vídeo)
                 else if (state.fase_actual === 'calibracion' && !calibracionActiva) {
                     iniciarRadar();
                 }
             } catch (err) {}
         }
 
-        // ====== LÓGICA DE FOTO (Alineación) ======
         async function enviarFrameAlineacion() {
-            if (video.videoWidth === 0) return;
+            if (video.videoWidth === 0) { isCapturing = false; return; }
             canvas.width = video.videoWidth; canvas.height = video.videoHeight;
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
             canvas.toBlob(async (blob) => {
                 const fd = new FormData(); fd.append('imagen', blob, 'frame.jpg');
                 try {
@@ -120,11 +123,14 @@
                         const fdControl = new FormData(); fdControl.append('fase', 'setup');
                         await fetch(`${baseUrl}/api/v1/control`, { method: 'POST', body: fdControl });
                     }
-                } catch (err) {}
+                } catch (err) {
+                    console.error("Error subiendo foto:", err);
+                } finally {
+                    isCapturing = false; 
+                }
             }, 'image/jpeg', 0.8);
         }
 
-        // ====== LÓGICA DE VÍDEO Y RADAR (Tarado) ======
         function iniciarRadar() {
             calibracionActiva = true;
             disparado = false;
@@ -133,19 +139,15 @@
             document.getElementById('status-box').className = "active";
             document.getElementById('status-text').innerText = "RADAR ACTIVO. Patea la bola...";
 
-            // 1. Iniciar Buffer Circular de Vídeo
-            // Usamos un códec súper ligero y compatible
             mediaRecorder = new MediaRecorder(streamGlobal, {mimeType: 'video/webm; codecs=vp8'});
             mediaRecorder.ondataavailable = (e) => {
                 if(e.data.size > 0) {
                     recordingChunks.push(e.data);
-                    // Mantenemos solo los últimos 6 trozos (3 segundos)
                     if(recordingChunks.length > 6) recordingChunks.shift(); 
                 }
             };
-            mediaRecorder.start(500); // Trocitos de medio segundo
+            mediaRecorder.start(500); 
 
-            // 2. Iniciar Algoritmo Pixel Difference (cada 50ms)
             radarInterval = setInterval(detectarMovimiento, 50);
         }
 
@@ -158,7 +160,6 @@
         function detectarMovimiento() {
             if(!calibracionActiva || disparado) return;
 
-            // Dibujar en el lienzo miniatura 64x36 para que el cálculo sea instantáneo
             radarCtx.drawImage(video, 0, 0, 64, 36);
             let frameData = radarCtx.getImageData(0, 0, 64, 36).data;
             
@@ -166,53 +167,45 @@
 
             let sumX = 0, diffCount = 0;
             
-            // Analizar solo el canal de grises para acelerar
             for(let i=0; i<frameData.length; i+=4) {
                 let rDiff = Math.abs(frameData[i] - prevPixels[i]);
-                if(rDiff > 35) { // Sensibilidad al cambio
+                if(rDiff > 35) { 
                     let x = (i/4) % 64;
                     sumX += x;
                     diffCount++;
                 }
             }
 
-            // Si hay un bloque de píxeles cambiando (la bola/palo moviéndose)
             if(diffCount > 40) {
-                let avgX = sumX / diffCount; // Centro de masas del movimiento
+                let avgX = sumX / diffCount; 
                 motionHistoryX.push(avgX);
                 if(motionHistoryX.length > 5) motionHistoryX.shift();
 
-                // Analizar la dirección
                 if(motionHistoryX.length === 5) {
                     let deltaX = motionHistoryX[4] - motionHistoryX[0];
-                    // Si el centro de movimiento avanza hacia la DERECHA (+ delta)
                     if(deltaX > 4) {
                         ejecutarCapturaImpacto();
                     }
                 }
             } else {
-                // Si no hay movimiento, limpiar el historial para evitar falsos positivos
                 motionHistoryX = [];
             }
-            
             prevPixels.set(frameData);
         }
 
         function ejecutarCapturaImpacto() {
             disparado = true;
-            clearInterval(radarInterval); // Apagar el radar
+            clearInterval(radarInterval); 
             
             document.getElementById('status-box').className = "recording";
             document.getElementById('status-text').innerText = "¡IMPACTO! Guardando...";
 
-            // Dejamos grabar 1.2 segundos adicionales para capturar la bola rodando
             setTimeout(() => {
                 mediaRecorder.stop();
                 
                 mediaRecorder.onstop = async () => {
                     document.getElementById('status-text').innerText = "SUBIENDO VÍDEO A COLAB...";
                     
-                    // Unir todos los trozos del buffer circular
                     const finalBlob = new Blob(recordingChunks, { type: 'video/webm' });
                     const fd = new FormData();
                     fd.append('video', finalBlob, 'tarado.webm');
