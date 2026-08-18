@@ -67,7 +67,7 @@
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
                 video.srcObject = stream;
                 document.getElementById('status-box').className = "active";
-                document.getElementById('status-text').innerText = "Sincronizado. Esperando...";
+                document.getElementById('status-text').innerText = "Cámara lista. Ve al PC.";
                 document.getElementById('btn-conectar').style.background = "#27ae60";
                 isConnected = true;
                 if(mainInterval) clearInterval(mainInterval);
@@ -95,7 +95,7 @@
                 else if (state.fase_actual === 'setup') {
                     calibracionActiva = false;
                     document.getElementById('status-box').className = state.fiduciales_ok ? "aligned" : "active";
-                    document.getElementById('status-text').innerText = state.fiduciales_ok ? "ALINEACIÓN OK" : "Esperando orden...";
+                    document.getElementById('status-text').innerText = state.fiduciales_ok ? "ALINEACIÓN OK" : "Cámara lista. Ve al PC.";
                 }
                 else if (state.fase_actual === 'calibracion' && !calibracionActiva) {
                     ejecutarRafagaFotos();
@@ -173,7 +173,7 @@
                     body: JSON.stringify({ fotos_b64: fotosRafaga })
                 });
                 
-                fotosRafaga = []; // Limpiar RAM Inmediatamente
+                fotosRafaga = []; // Limpiar RAM
                 
                 if(!res.ok) {
                     const err = await res.json();
