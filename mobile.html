@@ -37,7 +37,7 @@
         <canvas id="hidden-canvas"></canvas>
     </div>
     <div id="flash-overlay"></div>
-    <div id="mobile-overlay">5</div>
+    <div id="mobile-overlay">10</div>
     
     <div id="controls-overlay">
         <h2>Sensor Óptico</h2>
@@ -56,7 +56,6 @@
         let baseUrl = "", isConnected = false;
         let isCapturing = false; 
         
-        // Variables de Ráfaga
         let mediaRecorder = null;
         let recordingChunks = [];
         let calibracionActiva = false;
@@ -75,7 +74,7 @@
                 isConnected = true;
                 
                 if(mainInterval) clearInterval(mainInterval);
-                mainInterval = setInterval(consultarEstado, 1000); // Polling más rápido para pillar bien la orden
+                mainInterval = setInterval(consultarEstado, 1000); 
             } catch (err) { alert("Error de cámara."); }
         }
 
@@ -94,7 +93,7 @@
                     await enviarFrameAlineacion();
                 } 
                 else if (state.fase_actual === 'setup') {
-                    calibracionActiva = false; // Reset por si venimos de repetir un tarado
+                    calibracionActiva = false; 
                     document.getElementById('status-box').className = state.fiduciales_ok ? "aligned" : "active";
                     document.getElementById('status-text').innerText = state.fiduciales_ok ? "ALINEACIÓN OK" : "Esperando orden...";
                 }
@@ -131,7 +130,7 @@
         }
 
         // ==========================================
-        // LA RÁFAGA (Gatillo por Temporizador)
+        // LA RÁFAGA (Cuenta de 10 segundos)
         // ==========================================
         function ejecutarRafagaTarado() {
             calibracionActiva = true;
@@ -139,11 +138,10 @@
             const statusBox = document.getElementById('status-box');
             const statusText = document.getElementById('status-text');
 
-            // Mostrar cuenta atrás gigante
             mobileOverlay.style.display = 'flex';
-            mobileOverlay.style.color = '#f1c40f'; // Amarillo
+            mobileOverlay.style.color = '#f1c40f'; 
             
-            let count = 5;
+            let count = 10;
             mobileOverlay.innerText = count;
             statusBox.className = "active";
             statusText.innerText = "PREPARANDO...";
@@ -153,33 +151,32 @@
                 if(count > 0) {
                     mobileOverlay.innerText = count;
                 } else if(count === 0) {
-                    mobileOverlay.style.color = '#2ecc71'; // Verde
+                    mobileOverlay.style.color = '#2ecc71'; 
                     mobileOverlay.innerText = "¡GO!";
                     statusBox.className = "recording";
                     statusText.innerText = "🔴 GRABANDO PUTT...";
                     
-                    // Iniciar ráfaga (grabador webm)
+                    // GRABACIÓN FORZADA CADA 500ms PARA EVITAR BLOQUEOS
                     mediaRecorder = new MediaRecorder(video.srcObject, {mimeType: 'video/webm; codecs=vp8'});
                     mediaRecorder.ondataavailable = e => { if(e.data.size > 0) recordingChunks.push(e.data); };
-                    mediaRecorder.start();
+                    mediaRecorder.start(500);
                     
-                } else if(count === -3) { // 3 segundos de grabación son suficientes
+                } else if(count === -3) { // Grabamos durante 3 segundos
                     clearInterval(countInt);
                     mediaRecorder.stop();
                     
-                    mobileOverlay.style.color = '#e74c3c'; // Rojo
+                    mobileOverlay.style.color = '#e74c3c'; 
                     mobileOverlay.innerText = "¡FINISH!";
                     statusBox.className = "active";
                     statusText.innerText = "🚀 ENVIANDO AL PC...";
                     
                     setTimeout(() => { mobileOverlay.style.display = 'none'; }, 1500);
 
-                    // Al detenerse, empaquetar y limpiar memoria
                     mediaRecorder.onstop = async () => {
                         const blob = new Blob(recordingChunks, { type: 'video/webm' });
                         const fd = new FormData(); fd.append('video', blob, 'rafaga.webm');
                         
-                        // BORRADO INMEDIATO DE LA MEMORIA DEL MÓVIL
+                        // BORRADO INMEDIATO
                         recordingChunks = []; 
                         mediaRecorder = null;
 
